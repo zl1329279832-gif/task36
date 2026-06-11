@@ -86,5 +86,13 @@ public class CategoryServiceImpl extends ServiceImpl<CategoryMapper, Category> i
         pageVo.setRows(categories);
         return pageVo;
     }
+
+    @Override
+    public long countPublishedArticles(Long categoryId) {
+        LambdaQueryWrapper<Article> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(Article::getCategoryId, categoryId);
+        wrapper.eq(Article::getStatus, SystemConstants.ARTICLE_STATUS_NORMAL);
+        return articleService.count(wrapper);
+    }
 }
 

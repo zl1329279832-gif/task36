@@ -5,16 +5,19 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.sangeng.constants.SystemConstants;
 import com.sangeng.domain.ResponseResult;
+import com.sangeng.domain.entity.Article;
 import com.sangeng.domain.entity.Comment;
 import com.sangeng.domain.vo.CommentVo;
 import com.sangeng.domain.vo.PageVo;
 import com.sangeng.enums.AppHttpCodeEnum;
 import com.sangeng.exception.SystemException;
 import com.sangeng.mapper.CommentMapper;
+import com.sangeng.service.ArticleService;
 import com.sangeng.service.CommentService;
 import com.sangeng.service.UserService;
 import com.sangeng.utils.BeanCopyUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -31,6 +34,10 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment> impl
 
     @Autowired
     private UserService userService;
+
+    @Lazy
+    @Autowired
+    private ArticleService articleService;
 
     @Override
     public ResponseResult commentList(String commentType, Long articleId, Integer pageNum, Integer pageSize) {
@@ -66,6 +73,17 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment> impl
         //评论内容不能为空
         if(!StringUtils.hasText(comment.getContent())){
             throw new SystemException(AppHttpCodeEnum.CONTENT_NOT_NULL);
+        }
+        // 文章评论时检查评论是否被冻结
+        if (SystemConstants.ARTICLE_COMMENT.equals(comment.getType())) {
+            Article article = articleService.getById(comment.getArticleId());
+            if (article == null) {
+                throw new SystemException(AppHttpCodeEnum.ARTICLE_NOT_FOUND);
+            }
+            if (SystemConstants.ARTICLE_STATUS_VIOLATION_OFFLINE.equals(article.getStatus())
+                    || SystemConstants.COMMENT_DISALLOWED.equals(article.getIsComment())) {
+                throw new SystemException(AppHttpCodeEnum.ARTICLE_COMMENT_DISABLED);
+            }
         }
         save(comment);
         return ResponseResult.okResult();

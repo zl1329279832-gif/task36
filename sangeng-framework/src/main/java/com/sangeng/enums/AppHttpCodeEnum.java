@@ -17,7 +17,12 @@ public enum AppHttpCodeEnum {
     PASSWORD_NOT_NULL(510, "密码不能为空"),
     EMAIL_NOT_NULL(511, "邮箱不能为空"),
     NICKNAME_EXIST(512, "昵称已存在"),
-    LOGIN_ERROR(505,"用户名或密码错误");
+    LOGIN_ERROR(505,"用户名或密码错误"),
+    INVALID_STATE_TRANSITION(513, "无效的状态转换"),
+    ARTICLE_NOT_FOUND(514, "文章不存在"),
+    ARTICLE_COMMENT_DISABLED(515, "该文章评论已关闭"),
+    OSS_REFERENCE_INVALID(516, "文章包含无效的附件引用"),
+    ARTICLE_NOT_OWNED(517, "无权操作此文章");
     int code;
     String msg;
 

@@ -33,6 +33,8 @@ public class AddArticleDto {
     private Long viewCount;
     //是否允许评论 1是，0否
     private String isComment;
+    //定时发布时间
+    private Date publishTime;
     private List<Long> tags;
 
 }

@@ -1,14 +1,16 @@
 package com.sangeng.controller;
 
+import com.sangeng.annotation.SystemLog;
 import com.sangeng.domain.ResponseResult;
 import com.sangeng.domain.dto.AddArticleDto;
 import com.sangeng.domain.dto.ArticleDto;
+import com.sangeng.domain.dto.ArticleTransitionDto;
 import com.sangeng.domain.entity.Article;
 import com.sangeng.domain.vo.ArticleVo;
 import com.sangeng.domain.vo.PageVo;
 import com.sangeng.service.ArticleService;
-import com.sangeng.service.CategoryService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 /**
@@ -25,7 +27,6 @@ public class ArticleController {
     public ResponseResult add(@RequestBody AddArticleDto article){
         return articleService.add(article);
     }
-
 
     @GetMapping("/list")
     public ResponseResult list(Article article, Integer pageNum, Integer pageSize)
@@ -45,9 +46,21 @@ public class ArticleController {
         articleService.edit(article);
         return ResponseResult.okResult();
     }
+
     @DeleteMapping("/{id}")
     public ResponseResult delete(@PathVariable Long id){
         articleService.removeById(id);
         return ResponseResult.okResult();
+    }
+
+    @PutMapping("/transition")
+    @SystemLog(businessName = "文章状态转换")
+    public ResponseResult transitionStatus(@RequestBody ArticleTransitionDto dto){
+        return articleService.transitionStatus(dto);
+    }
+
+    @GetMapping("/{id}/operationLog")
+    public ResponseResult getOperationLog(@PathVariable Long id){
+        return articleService.getOperationLog(id);
     }
 }

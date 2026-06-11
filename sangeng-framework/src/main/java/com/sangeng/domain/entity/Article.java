@@ -47,6 +47,10 @@ public class Article  {
     private Long viewCount;
     //是否允许评论 1是，0否
     private String isComment;
+    //定时发布时间
+    private Date publishTime;
+    //违规下线原因
+    private String violationReason;
 
     @TableField(fill = FieldFill.INSERT)
     private Long createBy;

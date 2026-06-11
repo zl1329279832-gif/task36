@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.extension.service.IService;
 import com.sangeng.domain.ResponseResult;
 import com.sangeng.domain.dto.AddArticleDto;
 import com.sangeng.domain.dto.ArticleDto;
+import com.sangeng.domain.dto.ArticleTransitionDto;
 import com.sangeng.domain.entity.Article;
 import com.sangeng.domain.vo.ArticleVo;
 import com.sangeng.domain.vo.PageVo;
@@ -24,4 +25,10 @@ public interface ArticleService extends IService<Article> {
     ArticleVo getInfo(Long id);
 
     void edit(ArticleDto article);
+
+    ResponseResult transitionStatus(ArticleTransitionDto dto);
+
+    void publishScheduledArticles();
+
+    ResponseResult getOperationLog(Long articleId);
 }

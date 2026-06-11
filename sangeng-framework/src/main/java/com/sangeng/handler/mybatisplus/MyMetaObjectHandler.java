@@ -12,12 +12,11 @@ public class MyMetaObjectHandler implements MetaObjectHandler {
     @Override
     public void insertFill(MetaObject metaObject) {
         Long userId = null;
-//        try {
+        try {
             userId = SecurityUtils.getUserId();
-//        } catch (Exception e) {
-//            e.printStackTrace();
-//            userId = -1L;//表示是自己创建
-//        }
+        } catch (Exception e) {
+            userId = -1L;//表示是系统自动操作
+        }
         this.setFieldValByName("createTime", new Date(), metaObject);
         this.setFieldValByName("createBy",userId , metaObject);
         this.setFieldValByName("updateTime", new Date(), metaObject);
@@ -26,7 +25,13 @@ public class MyMetaObjectHandler implements MetaObjectHandler {
 
     @Override
     public void updateFill(MetaObject metaObject) {
+        Long userId = null;
+        try {
+            userId = SecurityUtils.getUserId();
+        } catch (Exception e) {
+            userId = -1L;
+        }
         this.setFieldValByName("updateTime", new Date(), metaObject);
-        this.setFieldValByName(" ", SecurityUtils.getUserId(), metaObject);
+        this.setFieldValByName("updateBy", userId, metaObject);
     }
 }

@@ -4,6 +4,7 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.Date;
 import java.util.List;
 
 @Data
@@ -31,6 +32,10 @@ public class ArticleVo {
     private Long viewCount;
     //是否允许评论 1是，0否
     private String isComment;
+    //定时发布时间
+    private Date publishTime;
+    //违规下线原因
+    private String violationReason;
     private List<Long> tags;
 
 }
