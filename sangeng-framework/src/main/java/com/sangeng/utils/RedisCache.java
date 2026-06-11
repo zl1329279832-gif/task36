@@ -240,4 +240,19 @@ public class RedisCache
     {
         return redisTemplate.keys(pattern);
     }
+
+    /**
+     * 按模式批量删除缓存
+     *
+     * @param pattern 键模式（如 "article:detail:*"）
+     * @return 删除的键数量
+     */
+    public long deleteByPattern(final String pattern)
+    {
+        Collection<String> keys = redisTemplate.keys(pattern);
+        if (keys != null && !keys.isEmpty()) {
+            return redisTemplate.delete(keys);
+        }
+        return 0;
+    }
 }

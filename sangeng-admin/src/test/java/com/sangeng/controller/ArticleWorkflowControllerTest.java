@@ -263,6 +263,66 @@ public class ArticleWorkflowControllerTest {
                 .andExpect(jsonPath("$.code").value(200));
     }
 
+    /**
+     * 违规下架定时发布文章 - 管理员可以对SCHEDULED状态文章违规下架
+     */
+    @Test
+    void testViolationOfflineOnScheduledArticle() throws Exception {
+        // 以管理员身份发布文章为定时发布状态
+        mockLoginAsAdmin();
+        workflowService.submitForReview(testArticleId);
+
+        java.util.Calendar cal = java.util.Calendar.getInstance();
+        cal.add(java.util.Calendar.HOUR, 1);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        approveDto.setScheduledPublishTime(cal.getTime());
+        workflowService.approve(approveDto);
+
+        Article article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.SCHEDULED.getCode(), article.getStatus());
+
+        // 管理员违规下架定时发布文章
+        ViolationActionDto violationDto = new ViolationActionDto();
+        violationDto.setArticleId(testArticleId);
+        violationDto.setViolationReason("定时发布内容违规");
+
+        mockMvc.perform(post("/content/article/workflow/violation")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(JSON.toJSONString(violationDto)))
+                .andExpect(status().isOk());
+
+        article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.VIOLATION_OFFLINE.getCode(), article.getStatus());
+        assertNull(article.getPublishTime());
+    }
+
+    /**
+     * 缓存刷新验证 - 违规下架后标签缓存也被清除
+     */
+    @Test
+    void testTagCacheInvalidatedOnViolationOffline() throws Exception {
+        mockLoginAsAdmin();
+
+        // 先发布文章
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        workflowService.approve(approveDto);
+
+        // 设置标签缓存
+        redisCache.setCacheObject(ArticleWorkflowConstants.CACHE_TAG_LIST, "cached_tags");
+
+        // 违规下架
+        ViolationActionDto violationDto = new ViolationActionDto();
+        violationDto.setArticleId(testArticleId);
+        violationDto.setViolationReason("违规内容");
+        workflowService.violationOffline(violationDto);
+
+        // 标签缓存应被清除
+        assertNull(redisCache.getCacheObject(ArticleWorkflowConstants.CACHE_TAG_LIST));
+    }
+
     // ========== 辅助方法 ==========
 
     private void mockLoginAsReviewer() {
@@ -303,6 +363,34 @@ public class ArticleWorkflowControllerTest {
         UsernamePasswordAuthenticationToken authToken =
                 new UsernamePasswordAuthenticationToken(loginUser, null,
                         Collections.singletonList(new SimpleGrantedAuthority("ROLE_USER")));
+        SecurityContextHolder.getContext().setAuthentication(authToken);
+    }
+
+    private void mockLoginAsAdmin() {
+        User user = new User();
+        user.setId(1L);
+        user.setUserName("admin");
+        user.setNickName("管理员");
+        user.setType("1");
+
+        List<String> perms = Arrays.asList(
+                "content:article:submit",
+                "content:article:approve",
+                "content:article:reject",
+                "content:article:withdraw",
+                "content:article:violation",
+                "content:article:forcePublish",
+                "content:article:review"
+        );
+
+        LoginUser loginUser = new LoginUser(user, perms);
+
+        List<SimpleGrantedAuthority> authorities = perms.stream()
+                .map(SimpleGrantedAuthority::new)
+                .collect(Collectors.toList());
+
+        UsernamePasswordAuthenticationToken authToken =
+                new UsernamePasswordAuthenticationToken(loginUser, null, authorities);
         SecurityContextHolder.getContext().setAuthentication(authToken);
     }
 }

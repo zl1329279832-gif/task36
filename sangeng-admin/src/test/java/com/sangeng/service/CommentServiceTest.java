@@ -2,6 +2,7 @@ package com.sangeng.service;
 
 import com.sangeng.BlogAdminApplication;
 import com.sangeng.constants.SystemConstants;
+import com.sangeng.domain.ResponseResult;
 import com.sangeng.domain.entity.Article;
 import com.sangeng.domain.entity.Comment;
 import com.sangeng.domain.entity.LoginUser;
@@ -148,6 +149,55 @@ public class CommentServiceTest {
         });
 
         assertEquals(AppHttpCodeEnum.CONTENT_NOT_NULL.getCode(), exception.getCode());
+    }
+
+    /**
+     * 历史评论在违规下架后仍可查询（保留历史评论）
+     */
+    @Test
+    void testHistoricalCommentsPreservedOnViolation() {
+        // 先在已发布文章上添加评论
+        Comment comment = new Comment();
+        comment.setType(SystemConstants.ARTICLE_COMMENT);
+        comment.setArticleId(publishedArticleId);
+        comment.setRootId(-1L);
+        comment.setContent("这是一条历史评论");
+        comment.setCreateBy(1L);
+        commentService.addComment(comment);
+
+        // 将文章改为违规下架状态
+        Article article = articleService.getById(publishedArticleId);
+        article.setStatus(ArticleStatusEnum.VIOLATION_OFFLINE.getCode());
+        article.setViolationReason("测试违规");
+        articleService.updateById(article);
+
+        // 历史评论列表应仍可查询
+        ResponseResult result = commentService.commentList(
+                SystemConstants.ARTICLE_COMMENT, publishedArticleId, 1, 10);
+        assertNotNull(result);
+        assertEquals(200, result.getCode());
+    }
+
+    /**
+     * 文章重新发布后评论功能恢复
+     */
+    @Test
+    void testCommentRestoredAfterRePublish() {
+        // 将违规文章重新发布
+        Article article = articleService.getById(violationArticleId);
+        article.setStatus(ArticleStatusEnum.PUBLISHED.getCode());
+        article.setViolationReason(null);
+        articleService.updateById(article);
+
+        // 评论功能应恢复正常
+        Comment comment = new Comment();
+        comment.setType(SystemConstants.ARTICLE_COMMENT);
+        comment.setArticleId(violationArticleId);
+        comment.setRootId(-1L);
+        comment.setContent("重新发布后的评论");
+        comment.setCreateBy(1L);
+
+        assertDoesNotThrow(() -> commentService.addComment(comment));
     }
 
     // ========== 辅助方法 ==========

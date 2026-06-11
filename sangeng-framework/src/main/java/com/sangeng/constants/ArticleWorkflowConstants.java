@@ -13,4 +13,5 @@ public class ArticleWorkflowConstants {
     public static final String CACHE_ARTICLE_DETAIL = "article:detail:";
     public static final String CACHE_HOME_ARTICLES = "article:homeList";
     public static final String CACHE_CATEGORY_LIST = "category:list";
+    public static final String CACHE_TAG_LIST = "tag:list";
 }

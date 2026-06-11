@@ -15,6 +15,7 @@ import com.sangeng.enums.ArticleStatusEnum;
 import com.sangeng.exception.SystemException;
 import com.sangeng.service.*;
 import com.sangeng.utils.BeanCopyUtils;
+import com.sangeng.utils.OssValidationUtil;
 import com.sangeng.utils.RedisCache;
 import com.sangeng.utils.SecurityUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -83,7 +84,9 @@ public class ArticleWorkflowServiceImpl implements ArticleWorkflowService {
                     ArticleStatusEnum.SCHEDULED.getCode(),
                     "审核通过，定时发布: " + scheduledTime);
         } else {
-            // 立即发布
+            // 立即发布前校验OSS附件引用
+            validateOssReferences(article);
+
             article.setStatus(ArticleStatusEnum.PUBLISHED.getCode());
             article.setPublishTime(new Date());
             articleService.updateById(article);
@@ -176,7 +179,13 @@ public class ArticleWorkflowServiceImpl implements ArticleWorkflowService {
         }
 
         Article article = getArticleOrThrow(dto.getArticleId());
-        assertStatus(article, ArticleStatusEnum.PUBLISHED);
+
+        // 违规下线优先级高于定时发布：已发布和定时发布状态均可下架
+        String currentStatus = article.getStatus();
+        if (!ArticleStatusEnum.PUBLISHED.getCode().equals(currentStatus) &&
+                !ArticleStatusEnum.SCHEDULED.getCode().equals(currentStatus)) {
+            throw new SystemException(AppHttpCodeEnum.ARTICLE_STATUS_INVALID);
+        }
 
         // 仅管理员可执行违规下架
         if (!SecurityUtils.isAdmin()) {
@@ -187,11 +196,17 @@ public class ArticleWorkflowServiceImpl implements ArticleWorkflowService {
 
         article.setStatus(ArticleStatusEnum.VIOLATION_OFFLINE.getCode());
         article.setViolationReason(dto.getViolationReason());
+        // 定时发布被下架时清除发布时间
+        if (ArticleStatusEnum.SCHEDULED.getCode().equals(oldStatus)) {
+            article.setPublishTime(null);
+        }
         articleService.updateById(article);
 
+        String reason = ArticleStatusEnum.SCHEDULED.getCode().equals(oldStatus)
+                ? "违规下架(中断定时发布): " + dto.getViolationReason()
+                : "违规下架: " + dto.getViolationReason();
         logTransition(dto.getArticleId(), oldStatus,
-                ArticleStatusEnum.VIOLATION_OFFLINE.getCode(),
-                "违规下架: " + dto.getViolationReason());
+                ArticleStatusEnum.VIOLATION_OFFLINE.getCode(), reason);
 
         // 清除缓存
         invalidateArticleCaches(article);
@@ -208,6 +223,9 @@ public class ArticleWorkflowServiceImpl implements ArticleWorkflowService {
         if (!SecurityUtils.isAdmin()) {
             throw new SystemException(AppHttpCodeEnum.NO_OPERATOR_AUTH);
         }
+
+        // 强制发布前校验OSS附件引用
+        validateOssReferences(article);
 
         String oldStatus = article.getStatus();
 
@@ -269,6 +287,25 @@ public class ArticleWorkflowServiceImpl implements ArticleWorkflowService {
         }
     }
 
+    /**
+     * 校验文章OSS附件引用是否有效，无效时阻止发布并写入审计日志
+     */
+    private void validateOssReferences(Article article) {
+        List<String> invalidUrls = OssValidationUtil.findInvalidOssUrls(
+                article.getContent(), article.getThumbnail());
+        if (!invalidUrls.isEmpty()) {
+            auditLogService.logOperation(
+                    article.getId(),
+                    article.getStatus(),
+                    article.getStatus(),
+                    SecurityUtils.getUserId(),
+                    "System",
+                    "发布阻止：OSS附件引用失效 " + String.join(", ", invalidUrls)
+            );
+            throw new SystemException(AppHttpCodeEnum.OSS_REFERENCE_INVALID);
+        }
+    }
+
     private ResponseResult getArticlesByStatus(String status, Integer pageNum, Integer pageSize) {
         LambdaQueryWrapper<Article> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(Article::getStatus, status)
@@ -315,10 +352,14 @@ public class ArticleWorkflowServiceImpl implements ArticleWorkflowService {
 
         // 删除分类列表缓存
         redisCache.deleteObject(ArticleWorkflowConstants.CACHE_CATEGORY_LIST);
+
+        // 删除标签列表缓存
+        redisCache.deleteObject(ArticleWorkflowConstants.CACHE_TAG_LIST);
     }
 
     /**
      * 清除文章相关缓存（下架/撤回时调用）
+     * 先清除缓存再提交事务，确保不会返回过期数据
      */
     private void invalidateArticleCaches(Article article) {
         refreshArticleCaches(article);

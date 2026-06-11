@@ -225,7 +225,7 @@ public class ArticleWorkflowServiceTest {
             workflowService.withdraw(testArticleId);
         });
 
-        // 草稿状态不能直接违规下架（只有已发布可违规下架）
+        // 草稿状态不能直接违规下架（只有已发布和定时发布可违规下架）
         ViolationActionDto violationDto = new ViolationActionDto();
         violationDto.setArticleId(testArticleId);
         violationDto.setViolationReason("测试");
@@ -318,6 +318,166 @@ public class ArticleWorkflowServiceTest {
         assertThrows(SystemException.class, () -> {
             workflowService.submitForReview(fakeId);
         });
+    }
+
+    /**
+     * 违规下架定时发布文章：定时发布状态的文章可以被管理员直接违规下架
+     */
+    @Test
+    void testViolationOfflineOnScheduledArticle() {
+        // 提交审核并设置定时发布
+        workflowService.submitForReview(testArticleId);
+
+        Calendar cal = Calendar.getInstance();
+        cal.add(Calendar.HOUR, 1);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        approveDto.setScheduledPublishTime(cal.getTime());
+        workflowService.approve(approveDto);
+
+        Article article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.SCHEDULED.getCode(), article.getStatus());
+
+        // 管理员违规下架定时发布中的文章
+        ViolationActionDto violationDto = new ViolationActionDto();
+        violationDto.setArticleId(testArticleId);
+        violationDto.setViolationReason("定时发布内容包含违规信息");
+        workflowService.violationOffline(violationDto);
+
+        article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.VIOLATION_OFFLINE.getCode(), article.getStatus());
+        assertEquals("定时发布内容包含违规信息", article.getViolationReason());
+        // 定时发布时间应被清除
+        assertNull(article.getPublishTime());
+
+        // 审计日志应记录中断定时发布
+        List<ArticleAuditLog> logs = auditLogService.getAuditHistory(testArticleId);
+        boolean hasInterruptLog = logs.stream()
+                .anyMatch(log -> log.getReason() != null && log.getReason().contains("中断定时发布"));
+        assertTrue(hasInterruptLog, "审计日志应包含中断定时发布的记录");
+    }
+
+    /**
+     * 定时发布被下线打断后重新编辑发布：违规下架 -> 重新编辑 -> 提交 -> 审核通过
+     */
+    @Test
+    void testRePublishAfterViolationOffline() {
+        // 发布文章
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        workflowService.approve(approveDto);
+
+        // 违规下架
+        ViolationActionDto violationDto = new ViolationActionDto();
+        violationDto.setArticleId(testArticleId);
+        violationDto.setViolationReason("违规内容");
+        workflowService.violationOffline(violationDto);
+
+        // 重新编辑
+        workflowService.reEdit(testArticleId);
+        Article article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.DRAFT.getCode(), article.getStatus());
+        assertNull(article.getViolationReason());
+
+        // 重新提交审核并发布 - 应恢复分类/标签统计
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto reApproveDto = new ReviewActionDto();
+        reApproveDto.setArticleId(testArticleId);
+        workflowService.approve(reApproveDto);
+
+        article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.PUBLISHED.getCode(), article.getStatus());
+        assertNotNull(article.getPublishTime());
+    }
+
+    /**
+     * OSS附件引用失效阻止立即发布并写入审计日志
+     */
+    @Test
+    void testOssValidationBlocksImmediatePublish() {
+        // 设置文章内容包含不可达的OSS图片
+        Article article = articleService.getById(testArticleId);
+        article.setContent("含失效图片 ![img](http://invalid-oss-host.example.com/broken.png)");
+        articleService.updateById(article);
+
+        workflowService.submitForReview(testArticleId);
+
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+
+        // 立即发布应被阻止
+        SystemException ex = assertThrows(SystemException.class, () -> {
+            workflowService.approve(approveDto);
+        });
+        assertEquals(518, ex.getCode());
+
+        // 文章应保持待审核状态
+        article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.PENDING_REVIEW.getCode(), article.getStatus());
+
+        // 审计日志应记录OSS失效
+        List<ArticleAuditLog> logs = auditLogService.getAuditHistory(testArticleId);
+        boolean hasOssLog = logs.stream()
+                .anyMatch(log -> log.getReason() != null && log.getReason().contains("OSS附件引用失效"));
+        assertTrue(hasOssLog, "审计日志应包含OSS附件引用失效记录");
+    }
+
+    /**
+     * OSS附件引用失效阻止强制发布
+     */
+    @Test
+    void testOssValidationBlocksForcePublish() {
+        Article article = articleService.getById(testArticleId);
+        article.setContent("含失效图片 ![img](http://invalid-oss-host.example.com/broken.jpg)");
+        articleService.updateById(article);
+
+        SystemException ex = assertThrows(SystemException.class, () -> {
+            workflowService.forcePublish(testArticleId);
+        });
+        assertEquals(518, ex.getCode());
+
+        // 文章应保持草稿状态
+        article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.DRAFT.getCode(), article.getStatus());
+    }
+
+    /**
+     * 缓存刷新验证 - 发布后标签缓存也被清除
+     */
+    @Test
+    void testTagCacheInvalidatedOnPublish() {
+        redisCache.setCacheObject("tag:list", "cached_tags");
+
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        workflowService.approve(approveDto);
+
+        assertNull(redisCache.getCacheObject("tag:list"));
+    }
+
+    /**
+     * 缓存刷新验证 - 违规下架后标签缓存也被清除
+     */
+    @Test
+    void testTagCacheInvalidatedOnViolationOffline() {
+        // 先发布
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        workflowService.approve(approveDto);
+
+        // 设置标签缓存
+        redisCache.setCacheObject("tag:list", "cached_tags");
+
+        // 违规下架
+        ViolationActionDto violationDto = new ViolationActionDto();
+        violationDto.setArticleId(testArticleId);
+        violationDto.setViolationReason("违规");
+        workflowService.violationOffline(violationDto);
+
+        assertNull(redisCache.getCacheObject("tag:list"));
     }
 
     // ========== 辅助方法 ==========

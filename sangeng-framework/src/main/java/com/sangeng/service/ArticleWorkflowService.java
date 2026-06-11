@@ -30,7 +30,7 @@ public interface ArticleWorkflowService {
 
     // ========== 管理员操作 ==========
 
-    /** 违规下架：已发布 -> 违规下架 */
+    /** 违规下架：已发布/定时发布 -> 违规下架（优先级高于定时发布） */
     ResponseResult violationOffline(ViolationActionDto dto);
 
     /** 强制发布：任意状态 -> 已发布 */
