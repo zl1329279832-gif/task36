@@ -9,6 +9,7 @@ import com.sangeng.domain.entity.Article;
 import com.sangeng.domain.entity.Category;
 import com.sangeng.domain.vo.CategoryVo;
 import com.sangeng.domain.vo.PageVo;
+import com.sangeng.enums.ArticleStatusEnum;
 import com.sangeng.mapper.CategoryMapper;
 import com.sangeng.service.ArticleService;
 import com.sangeng.service.CategoryService;
@@ -39,7 +40,7 @@ public class CategoryServiceImpl extends ServiceImpl<CategoryMapper, Category> i
     public ResponseResult getCategoryList() {
         //查询文章表  状态为已发布的文章
         LambdaQueryWrapper<Article> articleWrapper = new LambdaQueryWrapper<>();
-        articleWrapper.eq(Article::getStatus,SystemConstants.ARTICLE_STATUS_NORMAL);
+        articleWrapper.eq(Article::getStatus, ArticleStatusEnum.PUBLISHED.getCode());
         List<Article> articleList = articleService.list(articleWrapper);
         //获取文章的分类id，并且去重
         Set<Long> categoryIds = articleList.stream()

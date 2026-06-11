@@ -3,13 +3,29 @@ package com.sangeng.constants;
 public class SystemConstants
 {
     /**
-     *  文章是草稿
+     * @deprecated 使用 ArticleStatusEnum.DRAFT 代替
      */
+    @Deprecated
     public static final int ARTICLE_STATUS_DRAFT = 1;
     /**
-     *  文章是正常分布状态
+     * @deprecated 使用 ArticleStatusEnum.PUBLISHED 代替
      */
+    @Deprecated
     public static final int ARTICLE_STATUS_NORMAL = 0;
+
+    // ========== 文章生命周期状态 ==========
+    /** 草稿 */
+    public static final String ARTICLE_STATUS_DRAFT_STR = "0";
+    /** 待审核 */
+    public static final String ARTICLE_STATUS_PENDING_REVIEW = "1";
+    /** 定时发布 */
+    public static final String ARTICLE_STATUS_SCHEDULED = "2";
+    /** 已发布 */
+    public static final String ARTICLE_STATUS_PUBLISHED = "3";
+    /** 已撤回 */
+    public static final String ARTICLE_STATUS_WITHDRAWN = "4";
+    /** 违规下架 */
+    public static final String ARTICLE_STATUS_VIOLATION_OFFLINE = "5";
 
 
     public static final String  STATUS_NORMAL = "0";

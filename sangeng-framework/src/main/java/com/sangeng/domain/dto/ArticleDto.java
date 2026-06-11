@@ -4,6 +4,7 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.Date;
 import java.util.List;
 
 @Data
@@ -25,12 +26,14 @@ public class ArticleDto {
     private String thumbnail;
     //是否置顶（0否，1是）
     private String isTop;
-    //状态（0已发布，1草稿）
+    //状态（0草稿，1待审核，2定时发布，3已发布，4已撤回，5违规下架）
     private String status;
     //访问量
     private Long viewCount;
     //是否允许评论 1是，0否
     private String isComment;
     private List<Long> tags;
+    //定时发布时间
+    private Date publishTime;
 
 }

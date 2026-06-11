@@ -34,5 +34,7 @@ public class AddArticleDto {
     //是否允许评论 1是，0否
     private String isComment;
     private List<Long> tags;
+    //定时发布时间
+    private Date publishTime;
 
 }

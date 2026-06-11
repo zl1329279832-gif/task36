@@ -30,4 +30,13 @@ public class ArticleDetailVo {
 
     private Date createTime;
 
+    //状态（0草稿，1待审核，2定时发布，3已发布，4已撤回，5违规下架）
+    private String status;
+    //定时发布时间
+    private Date publishTime;
+    //驳回原因
+    private String rejectReason;
+    //违规原因
+    private String violationReason;
+
 }

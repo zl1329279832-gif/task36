@@ -41,12 +41,19 @@ public class Article  {
     private String thumbnail;
     //是否置顶（0否，1是）
     private String isTop;
-    //状态（0已发布，1草稿）
+    //状态（0草稿，1待审核，2定时发布，3已发布，4已撤回，5违规下架）
     private String status;
     //访问量
     private Long viewCount;
     //是否允许评论 1是，0否
     private String isComment;
+
+    //定时发布时间
+    private Date publishTime;
+    //驳回原因
+    private String rejectReason;
+    //违规原因
+    private String violationReason;
 
     @TableField(fill = FieldFill.INSERT)
     private Long createBy;

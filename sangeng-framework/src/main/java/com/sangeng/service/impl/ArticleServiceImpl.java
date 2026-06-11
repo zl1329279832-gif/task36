@@ -11,11 +11,15 @@ import com.sangeng.domain.entity.Article;
 import com.sangeng.domain.entity.ArticleTag;
 import com.sangeng.domain.entity.Category;
 import com.sangeng.domain.vo.*;
+import com.sangeng.enums.AppHttpCodeEnum;
+import com.sangeng.enums.ArticleStatusEnum;
+import com.sangeng.exception.SystemException;
 import com.sangeng.mapper.ArticleMapper;
 import com.sangeng.service.ArticleService;
 import com.sangeng.service.ArticleTagService;
 import com.sangeng.service.CategoryService;
 import com.sangeng.utils.BeanCopyUtils;
+import com.sangeng.utils.OssValidationUtil;
 import com.sangeng.utils.RedisCache;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cglib.beans.BeanCopier;
@@ -44,7 +48,7 @@ public class ArticleServiceImpl extends ServiceImpl<ArticleMapper, Article> impl
         //查询热门文章 封装成ResponseResult返回
         LambdaQueryWrapper<Article> queryWrapper = new LambdaQueryWrapper<>();
         //必须是正式文章
-        queryWrapper.eq(Article::getStatus, SystemConstants.ARTICLE_STATUS_NORMAL);
+        queryWrapper.eq(Article::getStatus, ArticleStatusEnum.PUBLISHED.getCode());
         //按照浏览量进行排序
         queryWrapper.orderByDesc(Article::getViewCount);
         //最多只查询10条
@@ -70,7 +74,7 @@ public class ArticleServiceImpl extends ServiceImpl<ArticleMapper, Article> impl
         // 如果 有categoryId 就要 查询时要和传入的相同
         lambdaQueryWrapper.eq(Objects.nonNull(categoryId)&&categoryId>0 ,Article::getCategoryId,categoryId);
         // 状态是正式发布的
-        lambdaQueryWrapper.eq(Article::getStatus,SystemConstants.ARTICLE_STATUS_NORMAL);
+        lambdaQueryWrapper.eq(Article::getStatus, ArticleStatusEnum.PUBLISHED.getCode());
         // 对isTop进行降序
         lambdaQueryWrapper.orderByDesc(Article::getIsTop);
 
@@ -104,6 +108,10 @@ public class ArticleServiceImpl extends ServiceImpl<ArticleMapper, Article> impl
     public ResponseResult getArticleDetail(Long id) {
         //根据id查询文章
         Article article = getById(id);
+        // 博客端仅允许查看已发布的文章
+        if (!ArticleStatusEnum.PUBLISHED.getCode().equals(article.getStatus())) {
+            throw new SystemException(AppHttpCodeEnum.ARTICLE_NOT_FOUND);
+        }
         //从redis中获取viewCount
         Integer viewCount = redisCache.getCacheMapValue("article:viewCount", id.toString());
         article.setViewCount(viewCount.longValue());
@@ -129,10 +137,21 @@ public class ArticleServiceImpl extends ServiceImpl<ArticleMapper, Article> impl
     @Override
     @Transactional
     public ResponseResult add(AddArticleDto articleDto) {
-        //添加 博客
-        Article article = BeanCopyUtils.copyBean(articleDto, Article.class);
-        save(article);
+        // OSS附件引用校验
+        List<String> imageUrls = OssValidationUtil.extractImageUrls(articleDto.getContent());
+        if (articleDto.getThumbnail() != null) {
+            imageUrls.add(articleDto.getThumbnail());
+        }
+        for (String url : imageUrls) {
+            if (!OssValidationUtil.isValidOssUrl(url)) {
+                throw new SystemException(AppHttpCodeEnum.SYSTEM_ERROR);
+            }
+        }
 
+        //添加 博客（新文章默认为草稿状态）
+        Article article = BeanCopyUtils.copyBean(articleDto, Article.class);
+        article.setStatus(ArticleStatusEnum.DRAFT.getCode());
+        save(article);
 
         List<ArticleTag> articleTags = articleDto.getTags().stream()
                 .map(tagId -> new ArticleTag(article.getId(), tagId))
@@ -182,6 +201,26 @@ public class ArticleServiceImpl extends ServiceImpl<ArticleMapper, Article> impl
 
     @Override
     public void edit(ArticleDto articleDto) {
+        // 只有草稿状态的文章可以直接编辑
+        Article existingArticle = getById(articleDto.getId());
+        if (existingArticle == null) {
+            throw new SystemException(AppHttpCodeEnum.ARTICLE_NOT_FOUND);
+        }
+        if (!ArticleStatusEnum.DRAFT.getCode().equals(existingArticle.getStatus())) {
+            throw new SystemException(AppHttpCodeEnum.ARTICLE_STATUS_INVALID);
+        }
+
+        // OSS附件引用校验
+        List<String> imageUrls = OssValidationUtil.extractImageUrls(articleDto.getContent());
+        if (articleDto.getThumbnail() != null) {
+            imageUrls.add(articleDto.getThumbnail());
+        }
+        for (String url : imageUrls) {
+            if (!OssValidationUtil.isValidOssUrl(url)) {
+                throw new SystemException(AppHttpCodeEnum.SYSTEM_ERROR);
+            }
+        }
+
         Article article = BeanCopyUtils.copyBean(articleDto, Article.class);
         //更新博客信息
         updateById(article);

@@ -5,12 +5,15 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.sangeng.constants.SystemConstants;
 import com.sangeng.domain.ResponseResult;
+import com.sangeng.domain.entity.Article;
 import com.sangeng.domain.entity.Comment;
 import com.sangeng.domain.vo.CommentVo;
 import com.sangeng.domain.vo.PageVo;
 import com.sangeng.enums.AppHttpCodeEnum;
+import com.sangeng.enums.ArticleStatusEnum;
 import com.sangeng.exception.SystemException;
 import com.sangeng.mapper.CommentMapper;
+import com.sangeng.service.ArticleService;
 import com.sangeng.service.CommentService;
 import com.sangeng.service.UserService;
 import com.sangeng.utils.BeanCopyUtils;
@@ -31,6 +34,9 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment> impl
 
     @Autowired
     private UserService userService;
+
+    @Autowired
+    private ArticleService articleService;
 
     @Override
     public ResponseResult commentList(String commentType, Long articleId, Integer pageNum, Integer pageSize) {
@@ -67,6 +73,15 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment> impl
         if(!StringUtils.hasText(comment.getContent())){
             throw new SystemException(AppHttpCodeEnum.CONTENT_NOT_NULL);
         }
+
+        // 文章评论需要检查文章状态：违规下架的文章冻结评论入口
+        if (SystemConstants.ARTICLE_COMMENT.equals(comment.getType()) && comment.getArticleId() != null) {
+            Article article = articleService.getById(comment.getArticleId());
+            if (article != null && ArticleStatusEnum.VIOLATION_OFFLINE.getCode().equals(article.getStatus())) {
+                throw new SystemException(AppHttpCodeEnum.COMMENT_FROZEN);
+            }
+        }
+
         save(comment);
         return ResponseResult.okResult();
     }

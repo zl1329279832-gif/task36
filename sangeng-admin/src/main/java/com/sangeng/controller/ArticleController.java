@@ -9,6 +9,7 @@ import com.sangeng.domain.vo.PageVo;
 import com.sangeng.service.ArticleService;
 import com.sangeng.service.CategoryService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 /**
@@ -22,12 +23,14 @@ public class ArticleController {
     private ArticleService articleService;
 
     @PostMapping
+    @PreAuthorize("@ps.hasPermission('content:article:add')")
     public ResponseResult add(@RequestBody AddArticleDto article){
         return articleService.add(article);
     }
 
 
     @GetMapping("/list")
+    @PreAuthorize("@ps.hasPermission('content:article:list')")
     public ResponseResult list(Article article, Integer pageNum, Integer pageSize)
     {
         PageVo pageVo = articleService.selectArticlePage(article,pageNum,pageSize);
@@ -35,17 +38,21 @@ public class ArticleController {
     }
 
     @GetMapping(value = "/{id}")
+    @PreAuthorize("@ps.hasPermission('content:article:query')")
     public ResponseResult getInfo(@PathVariable(value = "id")Long id){
         ArticleVo article = articleService.getInfo(id);
         return ResponseResult.okResult(article);
     }
 
     @PutMapping
+    @PreAuthorize("@ps.hasPermission('content:article:edit')")
     public ResponseResult edit(@RequestBody ArticleDto article){
         articleService.edit(article);
         return ResponseResult.okResult();
     }
+
     @DeleteMapping("/{id}")
+    @PreAuthorize("@ps.hasPermission('content:article:remove')")
     public ResponseResult delete(@PathVariable Long id){
         articleService.removeById(id);
         return ResponseResult.okResult();
