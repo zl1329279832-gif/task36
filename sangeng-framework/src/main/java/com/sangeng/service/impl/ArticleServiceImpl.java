@@ -129,6 +129,11 @@ public class ArticleServiceImpl extends ServiceImpl<ArticleMapper, Article> impl
 
     @Override
     public ResponseResult updateViewCount(Long id) {
+        // 仅已发布的文章才允许增加浏览量（下线/撤回文章不再追踪）
+        Article article = getById(id);
+        if (article == null || !ArticleStatusEnum.PUBLISHED.getCode().equals(article.getStatus())) {
+            return ResponseResult.okResult();
+        }
         //更新redis中对应 id的浏览量
         redisCache.incrementCacheMapValue("article:viewCount",id.toString(),1);
         return ResponseResult.okResult();

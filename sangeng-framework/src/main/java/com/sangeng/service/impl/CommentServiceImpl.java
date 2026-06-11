@@ -74,11 +74,29 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment> impl
             throw new SystemException(AppHttpCodeEnum.CONTENT_NOT_NULL);
         }
 
-        // 文章评论需要检查文章状态：违规下架的文章冻结评论入口
+        // 文章评论需要检查文章状态
         if (SystemConstants.ARTICLE_COMMENT.equals(comment.getType()) && comment.getArticleId() != null) {
             Article article = articleService.getById(comment.getArticleId());
-            if (article != null && ArticleStatusEnum.VIOLATION_OFFLINE.getCode().equals(article.getStatus())) {
-                throw new SystemException(AppHttpCodeEnum.COMMENT_FROZEN);
+            if (article != null) {
+                String status = article.getStatus();
+                // 违规下架：冻结新增评论（保留历史评论可查）
+                if (ArticleStatusEnum.VIOLATION_OFFLINE.getCode().equals(status)) {
+                    throw new SystemException(AppHttpCodeEnum.COMMENT_FROZEN);
+                }
+                // 已撤回：同样冻结新增评论入口
+                if (ArticleStatusEnum.WITHDRAWN.getCode().equals(status)) {
+                    throw new SystemException(AppHttpCodeEnum.COMMENT_FROZEN);
+                }
+                // 仅草稿/待审核/定时发布等未上线状态：不允许评论
+                if (ArticleStatusEnum.DRAFT.getCode().equals(status) ||
+                    ArticleStatusEnum.PENDING_REVIEW.getCode().equals(status) ||
+                    ArticleStatusEnum.SCHEDULED.getCode().equals(status)) {
+                    throw new SystemException(AppHttpCodeEnum.ARTICLE_STATUS_INVALID);
+                }
+                // 检查文章是否允许评论（isComment字段）
+                if ("0".equals(article.getIsComment())) {
+                    throw new SystemException(AppHttpCodeEnum.COMMENT_FROZEN);
+                }
             }
         }
 

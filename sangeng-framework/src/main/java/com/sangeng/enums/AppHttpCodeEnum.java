@@ -22,7 +22,8 @@ public enum AppHttpCodeEnum {
     ARTICLE_STATUS_INVALID(514, "当前文章状态不允许此操作"),
     REVIEW_REASON_REQUIRED(515, "审核驳回必须填写原因"),
     VIOLATION_REASON_REQUIRED(516, "违规下架必须填写原因"),
-    COMMENT_FROZEN(517, "该文章已违规下架，评论功能已冻结");
+    COMMENT_FROZEN(517, "该文章已违规下架，评论功能已冻结"),
+    OSS_REFERENCE_INVALID(518, "文章附件引用失效，无法发布");
     int code;
     String msg;
 

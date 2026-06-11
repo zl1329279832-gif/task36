@@ -25,6 +25,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.Arrays;
+import java.util.Calendar;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -34,7 +35,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 /**
- * 文章工作流控制器测试 - 验证权限拦截、缓存刷新
+ * 文章工作流控制器测试 - 验证权限拦截、缓存刷新、违规下线优先级
  */
 @SpringBootTest(classes = BlogAdminApplication.class)
 @AutoConfigureMockMvc
@@ -263,7 +264,139 @@ public class ArticleWorkflowControllerTest {
                 .andExpect(jsonPath("$.code").value(200));
     }
 
+    // ========== 新增：违规下线缓存失效与优先级测试 ==========
+
+    /**
+     * 违规下线后所有缓存（含浏览量）均被清除
+     */
+    @Test
+    void testCacheInvalidatedOnViolationOffline() throws Exception {
+        mockLoginAsAdmin();
+
+        // 发布文章
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        workflowService.approve(approveDto);
+
+        // 设置缓存（含浏览量）
+        String detailKey = ArticleWorkflowConstants.CACHE_ARTICLE_DETAIL + testArticleId;
+        redisCache.setCacheObject(detailKey, "cached_data");
+        redisCache.setCacheObject(ArticleWorkflowConstants.CACHE_HOME_ARTICLES, "home_list");
+        redisCache.setCacheObject(ArticleWorkflowConstants.CACHE_CATEGORY_LIST, "category_list");
+        redisCache.setCacheMapValue(ArticleWorkflowConstants.CACHE_VIEW_COUNT_KEY,
+                testArticleId.toString(), 200);
+
+        // 违规下线
+        ViolationActionDto violationDto = new ViolationActionDto();
+        violationDto.setArticleId(testArticleId);
+        violationDto.setViolationReason("缓存测试违规");
+        workflowService.violationOffline(violationDto);
+
+        // 验证所有缓存被清除
+        assertNull(redisCache.getCacheObject(detailKey), "详情缓存应被清除");
+        assertNull(redisCache.getCacheObject(ArticleWorkflowConstants.CACHE_HOME_ARTICLES),
+                "首页缓存应被清除");
+        assertNull(redisCache.getCacheObject(ArticleWorkflowConstants.CACHE_CATEGORY_LIST),
+                "分类缓存应被清除");
+        assertNull(redisCache.getCacheMapValue(ArticleWorkflowConstants.CACHE_VIEW_COUNT_KEY,
+                testArticleId.toString()), "浏览量缓存应被清除");
+    }
+
+    /**
+     * 定时发布文章可被管理员违规下线（优先级测试）
+     */
+    @Test
+    void testViolationOfflinePriorityOverScheduled() throws Exception {
+        mockLoginAsAdmin();
+
+        // 提交并审核为定时发布
+        workflowService.submitForReview(testArticleId);
+        Calendar cal = Calendar.getInstance();
+        cal.add(Calendar.HOUR, 1);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        approveDto.setScheduledPublishTime(cal.getTime());
+        workflowService.approve(approveDto);
+
+        Article article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.SCHEDULED.getCode(), article.getStatus());
+
+        // 管理员执行违规下线
+        ViolationActionDto violationDto = new ViolationActionDto();
+        violationDto.setArticleId(testArticleId);
+        violationDto.setViolationReason("定时发布中发现违规");
+
+        mockMvc.perform(post("/content/article/workflow/violation")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(JSON.toJSONString(violationDto)))
+                .andExpect(status().isOk());
+
+        // 验证文章已被下线
+        article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.VIOLATION_OFFLINE.getCode(), article.getStatus());
+    }
+
+    /**
+     * 违规下线接口权限拦截：非管理员返回403
+     */
+    @Test
+    void testViolationOfflinePermissionDenied() throws Exception {
+        // 以reviewer身份（非管理员）访问违规下线接口
+        mockLoginAsReviewer();
+
+        ViolationActionDto violationDto = new ViolationActionDto();
+        violationDto.setArticleId(testArticleId);
+        violationDto.setViolationReason("测试权限");
+
+        // reviewer没有 content:article:violation 权限，应被Spring Security拦截返回403
+        mockMvc.perform(post("/content/article/workflow/violation")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(JSON.toJSONString(violationDto)))
+                .andExpect(status().isForbidden());
+    }
+
+    /**
+     * 强制发布接口权限拦截：非管理员返回403
+     */
+    @Test
+    void testForcePublishPermissionDenied() throws Exception {
+        mockLoginAsReviewer();
+
+        mockMvc.perform(post("/content/article/workflow/forcePublish/" + testArticleId)
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isForbidden());
+    }
+
     // ========== 辅助方法 ==========
+
+    private void mockLoginAsAdmin() {
+        User user = new User();
+        user.setId(1L);
+        user.setUserName("admin");
+        user.setNickName("管理员");
+        user.setType("1");
+
+        List<String> perms = Arrays.asList(
+                "content:article:submit",
+                "content:article:approve",
+                "content:article:reject",
+                "content:article:withdraw",
+                "content:article:violation",
+                "content:article:forcePublish",
+                "content:article:review"
+        );
+
+        LoginUser loginUser = new LoginUser(user, perms);
+
+        List<SimpleGrantedAuthority> authorities = perms.stream()
+                .map(SimpleGrantedAuthority::new)
+                .collect(Collectors.toList());
+
+        UsernamePasswordAuthenticationToken authToken =
+                new UsernamePasswordAuthenticationToken(loginUser, null, authorities);
+        SecurityContextHolder.getContext().setAuthentication(authToken);
+    }
 
     private void mockLoginAsReviewer() {
         User user = new User();

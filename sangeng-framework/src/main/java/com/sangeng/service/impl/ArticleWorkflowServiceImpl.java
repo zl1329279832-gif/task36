@@ -15,17 +15,23 @@ import com.sangeng.enums.ArticleStatusEnum;
 import com.sangeng.exception.SystemException;
 import com.sangeng.service.*;
 import com.sangeng.utils.BeanCopyUtils;
+import com.sangeng.utils.OssValidationUtil;
 import com.sangeng.utils.RedisCache;
 import com.sangeng.utils.SecurityUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 
 @Service
 public class ArticleWorkflowServiceImpl implements ArticleWorkflowService {
+
+    private static final Logger log = LoggerFactory.getLogger(ArticleWorkflowServiceImpl.class);
 
     @Autowired
     private ArticleService articleService;
@@ -74,7 +80,7 @@ public class ArticleWorkflowServiceImpl implements ArticleWorkflowService {
 
         Date scheduledTime = dto.getScheduledPublishTime();
         if (scheduledTime != null && scheduledTime.after(new Date())) {
-            // 定时发布
+            // 定时发布 —— 不需要OSS校验（尚未发布）
             article.setStatus(ArticleStatusEnum.SCHEDULED.getCode());
             article.setPublishTime(scheduledTime);
             articleService.updateById(article);
@@ -83,7 +89,9 @@ public class ArticleWorkflowServiceImpl implements ArticleWorkflowService {
                     ArticleStatusEnum.SCHEDULED.getCode(),
                     "审核通过，定时发布: " + scheduledTime);
         } else {
-            // 立即发布
+            // 立即发布 —— 发布前校验OSS附件引用
+            validateOssReferences(article);
+
             article.setStatus(ArticleStatusEnum.PUBLISHED.getCode());
             article.setPublishTime(new Date());
             articleService.updateById(article);
@@ -92,7 +100,7 @@ public class ArticleWorkflowServiceImpl implements ArticleWorkflowService {
                     ArticleStatusEnum.PUBLISHED.getCode(),
                     "审核通过，立即发布");
 
-            // 刷新缓存
+            // 刷新缓存（先更新DB再清缓存，保证缓存一致性）
             refreshArticleCaches(article);
         }
 
@@ -138,7 +146,7 @@ public class ArticleWorkflowServiceImpl implements ArticleWorkflowService {
         logTransition(articleId, oldStatus,
                 ArticleStatusEnum.WITHDRAWN.getCode(), "撤回文章");
 
-        // 清除缓存
+        // 清除缓存（含浏览量）
         invalidateArticleCaches(article);
 
         return ResponseResult.okResult();
@@ -176,24 +184,28 @@ public class ArticleWorkflowServiceImpl implements ArticleWorkflowService {
         }
 
         Article article = getArticleOrThrow(dto.getArticleId());
-        assertStatus(article, ArticleStatusEnum.PUBLISHED);
 
-        // 仅管理员可执行违规下架
+        // 违规下线优先级高于定时发布：允许从 PUBLISHED 或 SCHEDULED 状态执行违规下线
+        String currentStatus = article.getStatus();
+        if (!ArticleStatusEnum.PUBLISHED.getCode().equals(currentStatus) &&
+                !ArticleStatusEnum.SCHEDULED.getCode().equals(currentStatus)) {
+            throw new SystemException(AppHttpCodeEnum.ARTICLE_STATUS_INVALID);
+        }
+
+        // 仅管理员可执行违规下线
         if (!SecurityUtils.isAdmin()) {
             throw new SystemException(AppHttpCodeEnum.NO_OPERATOR_AUTH);
         }
-
-        String oldStatus = article.getStatus();
 
         article.setStatus(ArticleStatusEnum.VIOLATION_OFFLINE.getCode());
         article.setViolationReason(dto.getViolationReason());
         articleService.updateById(article);
 
-        logTransition(dto.getArticleId(), oldStatus,
+        logTransition(dto.getArticleId(), currentStatus,
                 ArticleStatusEnum.VIOLATION_OFFLINE.getCode(),
-                "违规下架: " + dto.getViolationReason());
+                "违规下线: " + dto.getViolationReason());
 
-        // 清除缓存
+        // 先落库、再按顺序失效缓存：详情 → 首页列表 → 分类 → 浏览量
         invalidateArticleCaches(article);
 
         return ResponseResult.okResult();
@@ -209,6 +221,9 @@ public class ArticleWorkflowServiceImpl implements ArticleWorkflowService {
             throw new SystemException(AppHttpCodeEnum.NO_OPERATOR_AUTH);
         }
 
+        // 强制发布前必须通过OSS附件引用校验
+        validateOssReferences(article);
+
         String oldStatus = article.getStatus();
 
         article.setStatus(ArticleStatusEnum.PUBLISHED.getCode());
@@ -220,7 +235,7 @@ public class ArticleWorkflowServiceImpl implements ArticleWorkflowService {
         logTransition(articleId, oldStatus,
                 ArticleStatusEnum.PUBLISHED.getCode(), "强制发布");
 
-        // 刷新缓存
+        // 刷新缓存（重新发布时恢复分类/标签统计）
         refreshArticleCaches(article);
 
         return ResponseResult.okResult();
@@ -303,24 +318,87 @@ public class ArticleWorkflowServiceImpl implements ArticleWorkflowService {
     }
 
     /**
-     * 刷新文章相关缓存（发布时调用）
+     * 校验文章内容和缩略图中的OSS附件引用是否有效。
+     * 若任一引用失效，写入审计日志并抛出异常阻止发布。
+     */
+    private void validateOssReferences(Article article) {
+        List<String> invalidUrls = new ArrayList<>();
+
+        // 校验内容中的图片引用
+        List<String> contentUrls = OssValidationUtil.extractImageUrls(article.getContent());
+        for (String url : contentUrls) {
+            if (!OssValidationUtil.verifyOssReference(url)) {
+                invalidUrls.add(url);
+            }
+        }
+
+        // 校验缩略图引用
+        if (article.getThumbnail() != null && !article.getThumbnail().isEmpty()) {
+            if (!OssValidationUtil.verifyOssReference(article.getThumbnail())) {
+                invalidUrls.add(article.getThumbnail());
+            }
+        }
+
+        if (!invalidUrls.isEmpty()) {
+            // 写入审计日志：记录OSS引用校验失败
+            auditLogService.logOperation(
+                    article.getId(),
+                    article.getStatus(),
+                    article.getStatus(),  // 状态未变更
+                    SecurityUtils.getUserId(),
+                    getOperatorName(),
+                    "OSS附件引用失效，阻止发布。失效URL: " + String.join("; ", invalidUrls)
+            );
+
+            log.warn("文章[id={}] OSS附件引用失效，阻止发布。失效URL: {}", article.getId(), invalidUrls);
+            throw new SystemException(AppHttpCodeEnum.OSS_REFERENCE_INVALID);
+        }
+    }
+
+    private String getOperatorName() {
+        try {
+            Long operatorId = SecurityUtils.getUserId();
+            User operator = userService.getById(operatorId);
+            return operator != null ? operator.getNickName() : "Unknown";
+        } catch (Exception e) {
+            return "Unknown";
+        }
+    }
+
+    /**
+     * 刷新文章相关缓存（发布/重新发布时调用）。
+     * 按依赖顺序失效：详情 → 首页列表 → 分类列表，保证重新查询时数据一致。
      */
     private void refreshArticleCaches(Article article) {
-        // 删除文章详情缓存
+        // 1. 删除文章详情缓存（使下次查询获取最新状态）
         String detailKey = ArticleWorkflowConstants.CACHE_ARTICLE_DETAIL + article.getId();
         redisCache.deleteObject(detailKey);
 
-        // 删除首页文章列表缓存
+        // 2. 删除首页文章列表缓存
         redisCache.deleteObject(ArticleWorkflowConstants.CACHE_HOME_ARTICLES);
 
-        // 删除分类列表缓存
+        // 3. 删除分类列表缓存（重新发布时恢复分类/标签统计）
         redisCache.deleteObject(ArticleWorkflowConstants.CACHE_CATEGORY_LIST);
     }
 
     /**
-     * 清除文章相关缓存（下架/撤回时调用）
+     * 清除文章相关缓存（下线/撤回时调用）。
+     * 失效顺序：DB已更新 → 详情缓存 → 首页列表 → 分类列表 → 浏览量哈希。
+     * 先落库再清缓存，避免清缓存后查询到旧数据回填缓存。
      */
     private void invalidateArticleCaches(Article article) {
-        refreshArticleCaches(article);
+        // 1. 删除文章详情缓存
+        String detailKey = ArticleWorkflowConstants.CACHE_ARTICLE_DETAIL + article.getId();
+        redisCache.deleteObject(detailKey);
+
+        // 2. 删除首页文章列表缓存
+        redisCache.deleteObject(ArticleWorkflowConstants.CACHE_HOME_ARTICLES);
+
+        // 3. 删除分类列表缓存（下线后分类统计不再计入该文章）
+        redisCache.deleteObject(ArticleWorkflowConstants.CACHE_CATEGORY_LIST);
+
+        // 4. 清除该文章的浏览量缓存（下线文章不再追踪浏览量）
+        redisCache.delCacheMapValue(ArticleWorkflowConstants.CACHE_VIEW_COUNT_KEY,
+                article.getId().toString());
     }
 }

@@ -1,6 +1,8 @@
 package com.sangeng.service;
 
 import com.sangeng.BlogAdminApplication;
+import com.sangeng.constants.ArticleWorkflowConstants;
+import com.sangeng.domain.ResponseResult;
 import com.sangeng.domain.entity.Article;
 import com.sangeng.domain.entity.ArticleAuditLog;
 import com.sangeng.domain.entity.LoginUser;
@@ -225,7 +227,7 @@ public class ArticleWorkflowServiceTest {
             workflowService.withdraw(testArticleId);
         });
 
-        // 草稿状态不能直接违规下架（只有已发布可违规下架）
+        // 草稿状态不能直接违规下架（只有已发布/定时发布可违规下架）
         ViolationActionDto violationDto = new ViolationActionDto();
         violationDto.setArticleId(testArticleId);
         violationDto.setViolationReason("测试");
@@ -304,7 +306,7 @@ public class ArticleWorkflowServiceTest {
     @Test
     void testGetPendingReviewArticles() {
         workflowService.submitForReview(testArticleId);
-        var result = workflowService.getPendingReviewArticles(1, 10);
+        ResponseResult result = workflowService.getPendingReviewArticles(1, 10);
         assertNotNull(result);
         assertEquals(200, result.getCode());
     }
@@ -318,6 +320,325 @@ public class ArticleWorkflowServiceTest {
         assertThrows(SystemException.class, () -> {
             workflowService.submitForReview(fakeId);
         });
+    }
+
+    // ========== 新增：定时发布被违规下线打断场景 ==========
+
+    /**
+     * 违规下线可从SCHEDULED状态执行（优先级高于定时发布）
+     * 场景：文章审核通过进入定时发布队列，管理员发现违规，直接下线
+     */
+    @Test
+    void testViolationOfflineFromScheduled() {
+        // 1. 提交审核
+        workflowService.submitForReview(testArticleId);
+
+        // 2. 审核通过，设置定时发布
+        Calendar cal = Calendar.getInstance();
+        cal.add(Calendar.HOUR, 1);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        approveDto.setScheduledPublishTime(cal.getTime());
+        workflowService.approve(approveDto);
+
+        Article article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.SCHEDULED.getCode(), article.getStatus());
+
+        // 3. 管理员执行违规下线（应从SCHEDULED状态直接下线）
+        ViolationActionDto violationDto = new ViolationActionDto();
+        violationDto.setArticleId(testArticleId);
+        violationDto.setViolationReason("定时发布文章发现违规内容");
+        workflowService.violationOffline(violationDto);
+
+        // 4. 验证文章已变为违规下线状态
+        article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.VIOLATION_OFFLINE.getCode(), article.getStatus());
+        assertEquals("定时发布文章发现违规内容", article.getViolationReason());
+
+        // 5. 验证审计日志记录了从SCHEDULED到VIOLATION_OFFLINE的转换
+        List<ArticleAuditLog> logs = auditLogService.getAuditHistory(testArticleId);
+        ArticleAuditLog latestLog = logs.get(0);
+        assertEquals(ArticleStatusEnum.SCHEDULED.getCode(), latestLog.getFromStatus());
+        assertEquals(ArticleStatusEnum.VIOLATION_OFFLINE.getCode(), latestLog.getToStatus());
+    }
+
+    /**
+     * 定时发布被违规下线打断后，定时任务不应重新发布该文章。
+     * 模拟：文章从SCHEDULED变为VIOLATION_OFFLINE后，定时任务查询到的SCHEDULED文章应不再包含此文章。
+     */
+    @Test
+    void testScheduledPublishBlockedAfterViolation() {
+        // 1. 创建定时发布文章
+        workflowService.submitForReview(testArticleId);
+        Calendar cal = Calendar.getInstance();
+        cal.add(Calendar.HOUR, 1);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        approveDto.setScheduledPublishTime(cal.getTime());
+        workflowService.approve(approveDto);
+
+        // 2. 违规下线
+        ViolationActionDto violationDto = new ViolationActionDto();
+        violationDto.setArticleId(testArticleId);
+        violationDto.setViolationReason("违规");
+        workflowService.violationOffline(violationDto);
+
+        // 3. 模拟定时任务查询：SCHEDULED状态的文章不应包含已下线的文章
+        Article article = articleService.getById(testArticleId);
+        assertNotEquals(ArticleStatusEnum.SCHEDULED.getCode(), article.getStatus());
+        assertEquals(ArticleStatusEnum.VIOLATION_OFFLINE.getCode(), article.getStatus());
+
+        // 4. 即使手动将发布时间设为过去，文章也不是SCHEDULED状态，定时任务不会处理
+        article.setPublishTime(new Date(System.currentTimeMillis() - 60000));
+        articleService.updateById(article);
+
+        article = articleService.getById(testArticleId);
+        // 状态仍然是VIOLATION_OFFLINE，不会被定时任务误发布
+        assertEquals(ArticleStatusEnum.VIOLATION_OFFLINE.getCode(), article.getStatus());
+    }
+
+    /**
+     * 违规下线后缓存完全失效：详情缓存、首页列表、分类列表、浏览量均被清除
+     */
+    @Test
+    void testViolationOfflineCacheInvalidation() {
+        // 1. 发布文章
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        workflowService.approve(approveDto);
+
+        // 2. 设置各种缓存数据
+        String detailKey = ArticleWorkflowConstants.CACHE_ARTICLE_DETAIL + testArticleId;
+        redisCache.setCacheObject(detailKey, "cached_detail");
+        redisCache.setCacheObject(ArticleWorkflowConstants.CACHE_HOME_ARTICLES, "cached_home");
+        redisCache.setCacheObject(ArticleWorkflowConstants.CACHE_CATEGORY_LIST, "cached_category");
+        redisCache.setCacheMapValue(ArticleWorkflowConstants.CACHE_VIEW_COUNT_KEY,
+                testArticleId.toString(), 100);
+
+        // 3. 执行违规下线
+        ViolationActionDto violationDto = new ViolationActionDto();
+        violationDto.setArticleId(testArticleId);
+        violationDto.setViolationReason("测试缓存失效");
+        workflowService.violationOffline(violationDto);
+
+        // 4. 验证所有缓存均已清除
+        assertNull(redisCache.getCacheObject(detailKey), "文章详情缓存应被清除");
+        assertNull(redisCache.getCacheObject(ArticleWorkflowConstants.CACHE_HOME_ARTICLES),
+                "首页列表缓存应被清除");
+        assertNull(redisCache.getCacheObject(ArticleWorkflowConstants.CACHE_CATEGORY_LIST),
+                "分类列表缓存应被清除");
+
+        // 浏览量缓存也应被清除
+        Integer viewCount = redisCache.getCacheMapValue(
+                ArticleWorkflowConstants.CACHE_VIEW_COUNT_KEY, testArticleId.toString());
+        assertNull(viewCount, "浏览量缓存应被清除");
+    }
+
+    /**
+     * 撤回后缓存完全失效（含浏览量）
+     */
+    @Test
+    void testWithdrawCacheInvalidation() {
+        // 1. 发布文章
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        workflowService.approve(approveDto);
+
+        // 2. 设置缓存
+        String detailKey = ArticleWorkflowConstants.CACHE_ARTICLE_DETAIL + testArticleId;
+        redisCache.setCacheObject(detailKey, "cached_detail");
+        redisCache.setCacheMapValue(ArticleWorkflowConstants.CACHE_VIEW_COUNT_KEY,
+                testArticleId.toString(), 50);
+
+        // 3. 撤回
+        workflowService.withdraw(testArticleId);
+
+        // 4. 验证缓存清除
+        assertNull(redisCache.getCacheObject(detailKey), "撤回后详情缓存应清除");
+        Integer viewCount = redisCache.getCacheMapValue(
+                ArticleWorkflowConstants.CACHE_VIEW_COUNT_KEY, testArticleId.toString());
+        assertNull(viewCount, "撤回后浏览量缓存应清除");
+    }
+
+    /**
+     * 重新发布（违规下架 → 重新编辑 → 提交 → 审核通过）恢复分类/标签统计缓存
+     */
+    @Test
+    void testRepublishRestoresCategoryAndTagStats() {
+        // 1. 发布 → 违规下线
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        workflowService.approve(approveDto);
+
+        ViolationActionDto violationDto = new ViolationActionDto();
+        violationDto.setArticleId(testArticleId);
+        violationDto.setViolationReason("违规");
+        workflowService.violationOffline(violationDto);
+
+        // 2. 设置分类缓存（模拟下线后被缓存的情况）
+        redisCache.setCacheObject(ArticleWorkflowConstants.CACHE_CATEGORY_LIST, "stale_category_data");
+
+        // 3. 重新编辑 → 提交 → 审核通过
+        workflowService.reEdit(testArticleId);
+        workflowService.submitForReview(testArticleId);
+
+        ReviewActionDto reApproveDto = new ReviewActionDto();
+        reApproveDto.setArticleId(testArticleId);
+        workflowService.approve(reApproveDto);
+
+        // 4. 验证分类缓存被刷新（重新发布时恢复统计）
+        assertNull(redisCache.getCacheObject(ArticleWorkflowConstants.CACHE_CATEGORY_LIST),
+                "重新发布后分类缓存应被刷新以恢复统计");
+
+        // 5. 文章状态为已发布
+        Article article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.PUBLISHED.getCode(), article.getStatus());
+    }
+
+    /**
+     * OSS附件引用失效时阻止发布，并写入审计日志。
+     * 模拟：文章内容包含格式非法的图片URL（不以http开头），审核通过时应被阻止。
+     */
+    @Test
+    void testOssReferenceInvalidBlocksPublish() {
+        // 创建一篇包含无效OSS引用的文章
+        Article badArticle = new Article();
+        badArticle.setTitle("OSS失效文章");
+        badArticle.setContent("内容包含无效图片 <img src='ftp://invalid.oss.com/deleted.jpg'>");
+        badArticle.setSummary("测试OSS校验");
+        badArticle.setCategoryId(1L);
+        badArticle.setStatus(ArticleStatusEnum.DRAFT.getCode());
+        badArticle.setViewCount(0L);
+        badArticle.setIsTop("0");
+        badArticle.setIsComment("1");
+        badArticle.setCreateBy(adminUserId);
+        // 设置一个明确无效的缩略图URL
+        badArticle.setThumbnail("notaurl");
+        articleService.save(badArticle);
+        Long badArticleId = badArticle.getId();
+
+        try {
+            // 提交审核
+            workflowService.submitForReview(badArticleId);
+
+            // 审核通过（立即发布）—— 应因OSS校验失败而抛出异常
+            ReviewActionDto approveDto = new ReviewActionDto();
+            approveDto.setArticleId(badArticleId);
+            assertThrows(SystemException.class, () -> {
+                workflowService.approve(approveDto);
+            });
+
+            // 验证文章仍处于待审核状态（未被发布）
+            Article article = articleService.getById(badArticleId);
+            assertEquals(ArticleStatusEnum.PENDING_REVIEW.getCode(), article.getStatus());
+
+            // 验证审计日志中记录了OSS引用失效
+            List<ArticleAuditLog> logs = auditLogService.getAuditHistory(badArticleId);
+            boolean hasOssFailureLog = logs.stream()
+                    .anyMatch(log -> log.getReason() != null && log.getReason().contains("OSS附件引用失效"));
+            assertTrue(hasOssFailureLog, "审计日志应记录OSS引用失效事件");
+        } finally {
+            articleService.removeById(badArticleId);
+        }
+    }
+
+    /**
+     * 强制发布时OSS校验：附件引用失效应阻止强制发布
+     */
+    @Test
+    void testForcePublishOssValidation() {
+        // 创建包含无效附件的文章
+        Article badArticle = new Article();
+        badArticle.setTitle("强制发布OSS测试");
+        badArticle.setContent("无效引用 <img src='notavalidurl'>");
+        badArticle.setSummary("测试");
+        badArticle.setCategoryId(1L);
+        badArticle.setStatus(ArticleStatusEnum.DRAFT.getCode());
+        badArticle.setViewCount(0L);
+        badArticle.setIsTop("0");
+        badArticle.setIsComment("1");
+        badArticle.setCreateBy(adminUserId);
+        badArticle.setThumbnail("invalid_thumb");
+        articleService.save(badArticle);
+        Long badArticleId = badArticle.getId();
+
+        try {
+            assertThrows(SystemException.class, () -> {
+                workflowService.forcePublish(badArticleId);
+            });
+
+            // 文章仍为草稿状态
+            Article article = articleService.getById(badArticleId);
+            assertEquals(ArticleStatusEnum.DRAFT.getCode(), article.getStatus());
+        } finally {
+            articleService.removeById(badArticleId);
+        }
+    }
+
+    /**
+     * 非管理员无法执行违规下线（权限拦截）
+     */
+    @Test
+    void testViolationOfflinePermissionCheck() {
+        // 以非管理员身份登录
+        mockLoginAsNonAdmin();
+
+        // 先由管理员发布文章
+        mockLoginAsAdmin();
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        workflowService.approve(approveDto);
+
+        // 切换为非管理员
+        mockLoginAsNonAdmin();
+
+        ViolationActionDto violationDto = new ViolationActionDto();
+        violationDto.setArticleId(testArticleId);
+        violationDto.setViolationReason("尝试违规下线");
+
+        // 非管理员应被拒绝
+        assertThrows(SystemException.class, () -> {
+            workflowService.violationOffline(violationDto);
+        });
+
+        // 验证文章状态未变
+        Article article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.PUBLISHED.getCode(), article.getStatus());
+    }
+
+    /**
+     * 审核日志完整性：违规下线从SCHEDULED状态应有完整的状态链路
+     */
+    @Test
+    void testAuditTrailForScheduledToViolation() {
+        // 草稿 → 待审核 → 定时发布 → 违规下线
+        workflowService.submitForReview(testArticleId);
+
+        Calendar cal = Calendar.getInstance();
+        cal.add(Calendar.HOUR, 1);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        approveDto.setScheduledPublishTime(cal.getTime());
+        workflowService.approve(approveDto);
+
+        ViolationActionDto violationDto = new ViolationActionDto();
+        violationDto.setArticleId(testArticleId);
+        violationDto.setViolationReason("审核后发现违规");
+        workflowService.violationOffline(violationDto);
+
+        // 检查完整审计链路
+        List<ArticleAuditLog> logs = auditLogService.getAuditHistory(testArticleId);
+        assertTrue(logs.size() >= 3, "应至少有3条审计记录");
+
+        // 最近的记录应为违规下线
+        ArticleAuditLog latest = logs.get(0);
+        assertEquals(ArticleStatusEnum.SCHEDULED.getCode(), latest.getFromStatus());
+        assertEquals(ArticleStatusEnum.VIOLATION_OFFLINE.getCode(), latest.getToStatus());
+        assertTrue(latest.getReason().contains("审核后发现违规"));
     }
 
     // ========== 辅助方法 ==========
@@ -348,6 +669,29 @@ public class ArticleWorkflowServiceTest {
                 "content:article:forcePublish",
                 "content:article:review"
         ));
+
+        UsernamePasswordAuthenticationToken authToken =
+                new UsernamePasswordAuthenticationToken(loginUser, null, authorities);
+        SecurityContextHolder.getContext().setAuthentication(authToken);
+    }
+
+    private void mockLoginAsNonAdmin() {
+        User user = new User();
+        user.setId(99L);
+        user.setUserName("normaluser");
+        user.setNickName("普通用户");
+        user.setType("0");
+
+        List<String> perms = Arrays.asList(
+                "content:article:submit",
+                "content:article:approve"
+        );
+
+        LoginUser loginUser = new LoginUser(user, perms);
+
+        List<SimpleGrantedAuthority> authorities = perms.stream()
+                .map(SimpleGrantedAuthority::new)
+                .collect(Collectors.toList());
 
         UsernamePasswordAuthenticationToken authToken =
                 new UsernamePasswordAuthenticationToken(loginUser, null, authorities);
