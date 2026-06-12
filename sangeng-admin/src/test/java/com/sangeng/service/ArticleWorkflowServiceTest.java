@@ -7,6 +7,8 @@ import com.sangeng.domain.entity.Article;
 import com.sangeng.domain.entity.ArticleAuditLog;
 import com.sangeng.domain.entity.LoginUser;
 import com.sangeng.domain.entity.User;
+import com.sangeng.domain.dto.ArchiveActionDto;
+import com.sangeng.domain.dto.GrayscaleActionDto;
 import com.sangeng.domain.dto.ReviewActionDto;
 import com.sangeng.domain.dto.ViolationActionDto;
 import com.sangeng.enums.ArticleStatusEnum;
@@ -643,6 +645,285 @@ public class ArticleWorkflowServiceTest {
 
     // ========== 辅助方法 ==========
 
+    // ========== 灰度发布测试 ==========
+
+    /**
+     * 灰度发布流程：已发布 -> 灰度可见 -> 全量发布
+     */
+    @Test
+    void testGrayscaleToFullPublish() {
+        // 先发布文章
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        workflowService.approve(approveDto);
+
+        // 设置灰度可见
+        GrayscaleActionDto grayscaleDto = new GrayscaleActionDto();
+        grayscaleDto.setArticleId(testArticleId);
+        grayscaleDto.setGrayscaleGroups("group1,group2");
+        workflowService.setGrayscale(grayscaleDto);
+
+        Article article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.GRAYSCALE_VISIBLE.getCode(), article.getStatus());
+        assertEquals("group1,group2", article.getGrayscaleGroups());
+
+        // 全量发布
+        workflowService.fullPublish(testArticleId);
+        article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.PUBLISHED.getCode(), article.getStatus());
+        assertNull(article.getGrayscaleGroups());
+    }
+
+    /**
+     * 灰度可见文章可被违规下线
+     */
+    @Test
+    void testGrayscaleToViolationOffline() {
+        // 发布 -> 灰度可见
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        workflowService.approve(approveDto);
+
+        GrayscaleActionDto grayscaleDto = new GrayscaleActionDto();
+        grayscaleDto.setArticleId(testArticleId);
+        grayscaleDto.setGrayscaleGroups("beta");
+        workflowService.setGrayscale(grayscaleDto);
+
+        // 违规下线
+        ViolationActionDto violationDto = new ViolationActionDto();
+        violationDto.setArticleId(testArticleId);
+        violationDto.setViolationReason("灰度阶段发现违规");
+        workflowService.violationOffline(violationDto);
+
+        Article article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.VIOLATION_OFFLINE.getCode(), article.getStatus());
+    }
+
+    /**
+     * 非已发布状态不能设置灰度
+     */
+    @Test
+    void testGrayscaleFromInvalidState() {
+        GrayscaleActionDto dto = new GrayscaleActionDto();
+        dto.setArticleId(testArticleId);
+        dto.setGrayscaleGroups("group1");
+        assertThrows(SystemException.class, () -> workflowService.setGrayscale(dto));
+    }
+
+    // ========== 归档测试 ==========
+
+    /**
+     * 归档流程：已发布 -> 归档 -> 重新编辑(草稿)
+     */
+    @Test
+    void testArchiveAndReEdit() {
+        // 先发布
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        workflowService.approve(approveDto);
+
+        // 归档
+        ArchiveActionDto archiveDto = new ArchiveActionDto();
+        archiveDto.setArticleId(testArticleId);
+        archiveDto.setReason("内容过时");
+        workflowService.archive(archiveDto);
+
+        Article article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.ARCHIVED.getCode(), article.getStatus());
+        assertEquals("内容过时", article.getArchiveReason());
+
+        // 重新编辑
+        workflowService.reEdit(testArticleId);
+        article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.DRAFT.getCode(), article.getStatus());
+        assertNull(article.getArchiveReason());
+    }
+
+    /**
+     * 已撤回文章可归档
+     */
+    @Test
+    void testArchiveFromWithdrawn() {
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        workflowService.approve(approveDto);
+
+        workflowService.withdraw(testArticleId);
+
+        ArchiveActionDto archiveDto = new ArchiveActionDto();
+        archiveDto.setArticleId(testArticleId);
+        archiveDto.setReason("撤回后归档");
+        workflowService.archive(archiveDto);
+
+        Article article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.ARCHIVED.getCode(), article.getStatus());
+    }
+
+    /**
+     * 草稿状态不能归档
+     */
+    @Test
+    void testArchiveFromInvalidState() {
+        ArchiveActionDto dto = new ArchiveActionDto();
+        dto.setArticleId(testArticleId);
+        dto.setReason("测试");
+        assertThrows(SystemException.class, () -> workflowService.archive(dto));
+    }
+
+    // ========== 重新发布测试 ==========
+
+    /**
+     * 管理员可从违规下架状态重新发布
+     */
+    @Test
+    void testRepublishFromViolation() {
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        workflowService.approve(approveDto);
+
+        ViolationActionDto violationDto = new ViolationActionDto();
+        violationDto.setArticleId(testArticleId);
+        violationDto.setViolationReason("违规");
+        workflowService.violationOffline(violationDto);
+
+        workflowService.republish(testArticleId);
+        Article article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.PUBLISHED.getCode(), article.getStatus());
+        assertNull(article.getViolationReason());
+    }
+
+    /**
+     * 管理员可从已撤回状态重新发布
+     */
+    @Test
+    void testRepublishFromWithdrawn() {
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        workflowService.approve(approveDto);
+
+        workflowService.withdraw(testArticleId);
+
+        workflowService.republish(testArticleId);
+        Article article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.PUBLISHED.getCode(), article.getStatus());
+    }
+
+    /**
+     * 非管理员不能重新发布
+     */
+    @Test
+    void testRepublishPermissionDenied() {
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        workflowService.approve(approveDto);
+
+        workflowService.withdraw(testArticleId);
+
+        mockLoginAsNonAdmin();
+        assertThrows(SystemException.class, () -> workflowService.republish(testArticleId));
+
+        // 验证状态未变
+        Article article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.WITHDRAWN.getCode(), article.getStatus());
+    }
+
+    /**
+     * 重新发布后分类缓存被刷新
+     */
+    @Test
+    void testRepublishRestoresCategoryStats() {
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        workflowService.approve(approveDto);
+
+        ViolationActionDto violationDto = new ViolationActionDto();
+        violationDto.setArticleId(testArticleId);
+        violationDto.setViolationReason("违规");
+        workflowService.violationOffline(violationDto);
+
+        redisCache.setCacheObject(ArticleWorkflowConstants.CACHE_CATEGORY_LIST, "stale");
+
+        workflowService.republish(testArticleId);
+        assertNull(redisCache.getCacheObject(ArticleWorkflowConstants.CACHE_CATEGORY_LIST),
+                "重新发布后分类缓存应被刷新");
+    }
+
+    /**
+     * 缓存版本计数器在状态转换后递增
+     */
+    @Test
+    void testCacheVersionIncrement() {
+        // 清除计数器
+        redisCache.deleteObject(ArticleWorkflowConstants.CACHE_REFRESH_COUNT_KEY);
+
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        workflowService.approve(approveDto);
+
+        Integer count = redisCache.getCacheObject(ArticleWorkflowConstants.CACHE_REFRESH_COUNT_KEY);
+        assertNotNull(count);
+        assertTrue(count > 0, "缓存刷新计数器应在发布后递增");
+    }
+
+    /**
+     * 灰度流程审计日志完整性
+     */
+    @Test
+    void testAuditTrailForGrayscaleFlow() {
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        workflowService.approve(approveDto);
+
+        GrayscaleActionDto grayscaleDto = new GrayscaleActionDto();
+        grayscaleDto.setArticleId(testArticleId);
+        grayscaleDto.setGrayscaleGroups("beta");
+        workflowService.setGrayscale(grayscaleDto);
+
+        workflowService.fullPublish(testArticleId);
+
+        List<ArticleAuditLog> logs = auditLogService.getAuditHistory(testArticleId);
+        assertTrue(logs.size() >= 4, "应至少有4条审计记录（提交、审核、灰度、全量发布）");
+
+        // 最近一条应为灰度转全量发布
+        ArticleAuditLog latest = logs.get(0);
+        assertEquals(ArticleStatusEnum.GRAYSCALE_VISIBLE.getCode(), latest.getFromStatus());
+        assertEquals(ArticleStatusEnum.PUBLISHED.getCode(), latest.getToStatus());
+    }
+
+    /**
+     * 归档审计日志记录
+     */
+    @Test
+    void testAuditTrailForArchive() {
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        workflowService.approve(approveDto);
+
+        ArchiveActionDto archiveDto = new ArchiveActionDto();
+        archiveDto.setArticleId(testArticleId);
+        archiveDto.setReason("归档测试");
+        workflowService.archive(archiveDto);
+
+        List<ArticleAuditLog> logs = auditLogService.getAuditHistory(testArticleId);
+        ArticleAuditLog latest = logs.get(0);
+        assertEquals(ArticleStatusEnum.PUBLISHED.getCode(), latest.getFromStatus());
+        assertEquals(ArticleStatusEnum.ARCHIVED.getCode(), latest.getToStatus());
+        assertTrue(latest.getReason().contains("归档测试"));
+    }
+
+    // ========== 辅助方法 ==========
+
     private void mockLoginAsAdmin() {
         User user = new User();
         user.setId(adminUserId);
@@ -657,7 +938,11 @@ public class ArticleWorkflowServiceTest {
                 "content:article:withdraw",
                 "content:article:violation",
                 "content:article:forcePublish",
-                "content:article:review"
+                "content:article:review",
+                "content:article:grayscale",
+                "content:article:archive",
+                "content:article:republish",
+                "content:article:dashboard"
         ).stream().map(SimpleGrantedAuthority::new).collect(Collectors.toList());
 
         LoginUser loginUser = new LoginUser(user, Arrays.asList(
@@ -667,7 +952,11 @@ public class ArticleWorkflowServiceTest {
                 "content:article:withdraw",
                 "content:article:violation",
                 "content:article:forcePublish",
-                "content:article:review"
+                "content:article:review",
+                "content:article:grayscale",
+                "content:article:archive",
+                "content:article:republish",
+                "content:article:dashboard"
         ));
 
         UsernamePasswordAuthenticationToken authToken =

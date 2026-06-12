@@ -2,6 +2,8 @@ package com.sangeng.controller;
 
 import com.sangeng.annotation.SystemLog;
 import com.sangeng.domain.ResponseResult;
+import com.sangeng.domain.dto.ArchiveActionDto;
+import com.sangeng.domain.dto.GrayscaleActionDto;
 import com.sangeng.domain.dto.ReviewActionDto;
 import com.sangeng.domain.dto.ViolationActionDto;
 import com.sangeng.service.ArticleWorkflowService;
@@ -93,5 +95,64 @@ public class ArticleWorkflowController {
     @PreAuthorize("@ps.hasPermission('content:article:review')")
     public ResponseResult getAuditHistory(@PathVariable Long articleId) {
         return workflowService.getAuditHistory(articleId);
+    }
+
+    // ========== 灰度发布 ==========
+
+    @PostMapping("/grayscale")
+    @PreAuthorize("@ps.hasPermission('content:article:grayscale')")
+    @SystemLog(businessName = "设置灰度可见")
+    public ResponseResult setGrayscale(@RequestBody GrayscaleActionDto dto) {
+        return workflowService.setGrayscale(dto);
+    }
+
+    @PostMapping("/fullPublish/{articleId}")
+    @PreAuthorize("@ps.hasPermission('content:article:grayscale')")
+    @SystemLog(businessName = "灰度转全量发布")
+    public ResponseResult fullPublish(@PathVariable Long articleId) {
+        return workflowService.fullPublish(articleId);
+    }
+
+    @GetMapping("/grayscale")
+    @PreAuthorize("@ps.hasPermission('content:article:grayscale')")
+    public ResponseResult getGrayscaleArticles(
+            @RequestParam(defaultValue = "1") Integer pageNum,
+            @RequestParam(defaultValue = "10") Integer pageSize) {
+        return workflowService.getGrayscaleArticles(pageNum, pageSize);
+    }
+
+    // ========== 归档 ==========
+
+    @PostMapping("/archive")
+    @PreAuthorize("@ps.hasPermission('content:article:archive')")
+    @SystemLog(businessName = "归档文章")
+    public ResponseResult archive(@RequestBody ArchiveActionDto dto) {
+        return workflowService.archive(dto);
+    }
+
+    @GetMapping("/archived")
+    @PreAuthorize("@ps.hasPermission('content:article:archive')")
+    public ResponseResult getArchivedArticles(
+            @RequestParam(defaultValue = "1") Integer pageNum,
+            @RequestParam(defaultValue = "10") Integer pageSize) {
+        return workflowService.getArchivedArticles(pageNum, pageSize);
+    }
+
+    // ========== 重新发布 ==========
+
+    @PostMapping("/republish/{articleId}")
+    @PreAuthorize("@ps.hasPermission('content:article:republish')")
+    @SystemLog(businessName = "管理员重新发布")
+    public ResponseResult republish(@PathVariable Long articleId) {
+        return workflowService.republish(articleId);
+    }
+
+    // ========== 运维仪表盘 ==========
+
+    @GetMapping("/dashboard")
+    @PreAuthorize("@ps.hasPermission('content:article:dashboard')")
+    @SystemLog(businessName = "查询运维仪表盘")
+    public ResponseResult getDashboardStats() {
+        return workflowService.getDashboardStats();
     }
 }

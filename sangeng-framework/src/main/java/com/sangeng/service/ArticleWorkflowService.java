@@ -1,6 +1,8 @@
 package com.sangeng.service;
 
 import com.sangeng.domain.ResponseResult;
+import com.sangeng.domain.dto.ArchiveActionDto;
+import com.sangeng.domain.dto.GrayscaleActionDto;
 import com.sangeng.domain.dto.ReviewActionDto;
 import com.sangeng.domain.dto.ViolationActionDto;
 
@@ -49,4 +51,35 @@ public interface ArticleWorkflowService {
 
     /** 获取文章审核历史 */
     ResponseResult getAuditHistory(Long articleId);
+
+    // ========== 灰度发布操作 ==========
+
+    /** 设置灰度可见：已发布 -> 灰度可见 */
+    ResponseResult setGrayscale(GrayscaleActionDto dto);
+
+    /** 全量发布：灰度可见 -> 已发布 */
+    ResponseResult fullPublish(Long articleId);
+
+    // ========== 归档操作 ==========
+
+    /** 归档文章：已发布/已撤回 -> 归档 */
+    ResponseResult archive(ArchiveActionDto dto);
+
+    // ========== 管理员快速恢复 ==========
+
+    /** 重新发布：违规下架/已撤回 -> 已发布（管理员，绕过审核） */
+    ResponseResult republish(Long articleId);
+
+    // ========== 仪表盘 ==========
+
+    /** 获取运维仪表盘统计数据 */
+    ResponseResult getDashboardStats();
+
+    // ========== 查询方法扩展 ==========
+
+    /** 获取灰度可见文章列表 */
+    ResponseResult getGrayscaleArticles(Integer pageNum, Integer pageSize);
+
+    /** 获取归档文章列表 */
+    ResponseResult getArchivedArticles(Integer pageNum, Integer pageSize);
 }

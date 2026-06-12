@@ -87,6 +87,10 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment> impl
                 if (ArticleStatusEnum.WITHDRAWN.getCode().equals(status)) {
                     throw new SystemException(AppHttpCodeEnum.COMMENT_FROZEN);
                 }
+                // 已归档：冻结评论（只读历史）
+                if (ArticleStatusEnum.ARCHIVED.getCode().equals(status)) {
+                    throw new SystemException(AppHttpCodeEnum.COMMENT_ARCHIVED);
+                }
                 // 仅草稿/待审核/定时发布等未上线状态：不允许评论
                 if (ArticleStatusEnum.DRAFT.getCode().equals(status) ||
                     ArticleStatusEnum.PENDING_REVIEW.getCode().equals(status) ||

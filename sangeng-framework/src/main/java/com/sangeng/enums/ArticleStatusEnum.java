@@ -6,7 +6,9 @@ public enum ArticleStatusEnum {
     SCHEDULED("2", "定时发布"),
     PUBLISHED("3", "已发布"),
     WITHDRAWN("4", "已撤回"),
-    VIOLATION_OFFLINE("5", "违规下架");
+    VIOLATION_OFFLINE("5", "违规下架"),
+    GRAYSCALE_VISIBLE("6", "灰度可见"),
+    ARCHIVED("7", "归档");
 
     private final String code;
     private final String desc;

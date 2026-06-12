@@ -108,8 +108,10 @@ public class ArticleServiceImpl extends ServiceImpl<ArticleMapper, Article> impl
     public ResponseResult getArticleDetail(Long id) {
         //根据id查询文章
         Article article = getById(id);
-        // 博客端仅允许查看已发布的文章
-        if (!ArticleStatusEnum.PUBLISHED.getCode().equals(article.getStatus())) {
+        // 博客端仅允许查看已发布或灰度可见的文章
+        String articleStatus = article.getStatus();
+        if (!ArticleStatusEnum.PUBLISHED.getCode().equals(articleStatus) &&
+                !ArticleStatusEnum.GRAYSCALE_VISIBLE.getCode().equals(articleStatus)) {
             throw new SystemException(AppHttpCodeEnum.ARTICLE_NOT_FOUND);
         }
         //从redis中获取viewCount
@@ -129,9 +131,11 @@ public class ArticleServiceImpl extends ServiceImpl<ArticleMapper, Article> impl
 
     @Override
     public ResponseResult updateViewCount(Long id) {
-        // 仅已发布的文章才允许增加浏览量（下线/撤回文章不再追踪）
+        // 仅已发布或灰度可见的文章才允许增加浏览量（下线/撤回文章不再追踪）
         Article article = getById(id);
-        if (article == null || !ArticleStatusEnum.PUBLISHED.getCode().equals(article.getStatus())) {
+        if (article == null ||
+                (!ArticleStatusEnum.PUBLISHED.getCode().equals(article.getStatus()) &&
+                 !ArticleStatusEnum.GRAYSCALE_VISIBLE.getCode().equals(article.getStatus()))) {
             return ResponseResult.okResult();
         }
         //更新redis中对应 id的浏览量

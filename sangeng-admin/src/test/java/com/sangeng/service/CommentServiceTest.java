@@ -41,6 +41,8 @@ public class CommentServiceTest {
     private Long violationArticleId;
     private Long withdrawnArticleId;
     private Long draftArticleId;
+    private Long archivedArticleId;
+    private Long grayscaleArticleId;
 
     @BeforeEach
     void setUp() {
@@ -98,6 +100,34 @@ public class CommentServiceTest {
         draftArticle.setIsComment("1");
         articleService.save(draftArticle);
         draftArticleId = draftArticle.getId();
+
+        // 创建一篇归档文章
+        Article archivedArticle = new Article();
+        archivedArticle.setTitle("归档文章");
+        archivedArticle.setContent("归档内容");
+        archivedArticle.setSummary("归档");
+        archivedArticle.setCategoryId(1L);
+        archivedArticle.setStatus(ArticleStatusEnum.ARCHIVED.getCode());
+        archivedArticle.setViewCount(0L);
+        archivedArticle.setIsTop("0");
+        archivedArticle.setIsComment("1");
+        archivedArticle.setArchiveReason("内容过时");
+        articleService.save(archivedArticle);
+        archivedArticleId = archivedArticle.getId();
+
+        // 创建一篇灰度可见文章
+        Article grayscaleArticle = new Article();
+        grayscaleArticle.setTitle("灰度文章");
+        grayscaleArticle.setContent("灰度内容");
+        grayscaleArticle.setSummary("灰度");
+        grayscaleArticle.setCategoryId(1L);
+        grayscaleArticle.setStatus(ArticleStatusEnum.GRAYSCALE_VISIBLE.getCode());
+        grayscaleArticle.setViewCount(0L);
+        grayscaleArticle.setIsTop("0");
+        grayscaleArticle.setIsComment("1");
+        grayscaleArticle.setGrayscaleGroups("beta");
+        articleService.save(grayscaleArticle);
+        grayscaleArticleId = grayscaleArticle.getId();
     }
 
     @AfterEach
@@ -113,6 +143,12 @@ public class CommentServiceTest {
         }
         if (draftArticleId != null) {
             articleService.removeById(draftArticleId);
+        }
+        if (archivedArticleId != null) {
+            articleService.removeById(archivedArticleId);
+        }
+        if (grayscaleArticleId != null) {
+            articleService.removeById(grayscaleArticleId);
         }
         SecurityContextHolder.clearContext();
     }
@@ -297,6 +333,80 @@ public class CommentServiceTest {
         } finally {
             articleService.removeById(noCommentArticle.getId());
         }
+    }
+
+    // ========== 新增：归档/灰度评论测试 ==========
+
+    /**
+     * 归档文章评论被冻结 - 新增评论应抛出 COMMENT_ARCHIVED 异常
+     */
+    @Test
+    void testCommentFrozenOnArchivedArticle() {
+        Comment comment = new Comment();
+        comment.setType(SystemConstants.ARTICLE_COMMENT);
+        comment.setArticleId(archivedArticleId);
+        comment.setRootId(-1L);
+        comment.setContent("尝试在归档文章下评论");
+        comment.setCreateBy(1L);
+
+        SystemException exception = assertThrows(SystemException.class, () -> {
+            commentService.addComment(comment);
+        });
+
+        assertEquals(AppHttpCodeEnum.COMMENT_ARCHIVED.getCode(), exception.getCode());
+    }
+
+    /**
+     * 灰度可见文章允许评论
+     */
+    @Test
+    void testCommentAllowedOnGrayscaleArticle() {
+        Comment comment = new Comment();
+        comment.setType(SystemConstants.ARTICLE_COMMENT);
+        comment.setArticleId(grayscaleArticleId);
+        comment.setRootId(-1L);
+        comment.setContent("灰度文章下的评论");
+        comment.setCreateBy(1L);
+
+        assertDoesNotThrow(() -> commentService.addComment(comment));
+    }
+
+    /**
+     * 归档文章的历史评论仍然可查
+     */
+    @Test
+    void testHistoricalCommentsPreservedOnArchivedArticle() {
+        // 先在已发布文章下添加评论
+        Comment historicalComment = new Comment();
+        historicalComment.setType(SystemConstants.ARTICLE_COMMENT);
+        historicalComment.setArticleId(publishedArticleId);
+        historicalComment.setRootId(-1L);
+        historicalComment.setContent("归档前的评论");
+        historicalComment.setCreateBy(1L);
+        commentService.addComment(historicalComment);
+
+        // 模拟归档
+        Article article = articleService.getById(publishedArticleId);
+        article.setStatus(ArticleStatusEnum.ARCHIVED.getCode());
+        article.setArchiveReason("测试归档历史评论保留");
+        articleService.updateById(article);
+
+        // 评论列表仍应可查
+        final Long articleId = publishedArticleId;
+        ResponseResult result = assertDoesNotThrow(() ->
+                commentService.commentList(SystemConstants.ARTICLE_COMMENT, articleId, 1, 10)
+        );
+        assertNotNull(result);
+        assertEquals(200, result.getCode());
+
+        // 但新增评论应被冻结
+        Comment newComment = new Comment();
+        newComment.setType(SystemConstants.ARTICLE_COMMENT);
+        newComment.setArticleId(publishedArticleId);
+        newComment.setRootId(-1L);
+        newComment.setContent("尝试在归档文章下新增评论");
+        newComment.setCreateBy(1L);
+        assertThrows(SystemException.class, () -> commentService.addComment(newComment));
     }
 
     // ========== 辅助方法 ==========

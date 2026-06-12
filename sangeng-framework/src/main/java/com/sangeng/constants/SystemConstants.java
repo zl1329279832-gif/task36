@@ -26,6 +26,10 @@ public class SystemConstants
     public static final String ARTICLE_STATUS_WITHDRAWN = "4";
     /** 违规下架 */
     public static final String ARTICLE_STATUS_VIOLATION_OFFLINE = "5";
+    /** 灰度可见 */
+    public static final String ARTICLE_STATUS_GRAYSCALE_VISIBLE = "6";
+    /** 归档 */
+    public static final String ARTICLE_STATUS_ARCHIVED = "7";
 
 
     public static final String  STATUS_NORMAL = "0";

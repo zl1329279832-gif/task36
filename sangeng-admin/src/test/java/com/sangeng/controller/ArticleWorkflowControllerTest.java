@@ -3,6 +3,8 @@ package com.sangeng.controller;
 import com.alibaba.fastjson.JSON;
 import com.sangeng.BlogAdminApplication;
 import com.sangeng.constants.ArticleWorkflowConstants;
+import com.sangeng.domain.dto.ArchiveActionDto;
+import com.sangeng.domain.dto.GrayscaleActionDto;
 import com.sangeng.domain.dto.ReviewActionDto;
 import com.sangeng.domain.dto.ViolationActionDto;
 import com.sangeng.domain.entity.Article;
@@ -368,6 +370,105 @@ public class ArticleWorkflowControllerTest {
                 .andExpect(status().isForbidden());
     }
 
+    // ========== 新增：灰度/归档/重新发布/仪表盘测试 ==========
+
+    /**
+     * 灰度发布接口测试
+     */
+    @Test
+    void testGrayscaleEndpoint() throws Exception {
+        mockLoginAsAdmin();
+
+        // 先发布文章
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        workflowService.approve(approveDto);
+
+        // 设置灰度可见
+        GrayscaleActionDto dto = new GrayscaleActionDto();
+        dto.setArticleId(testArticleId);
+        dto.setGrayscaleGroups("beta_users");
+
+        mockMvc.perform(post("/content/article/workflow/grayscale")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(JSON.toJSONString(dto)))
+                .andExpect(status().isOk());
+
+        Article article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.GRAYSCALE_VISIBLE.getCode(), article.getStatus());
+    }
+
+    /**
+     * 归档接口测试
+     */
+    @Test
+    void testArchiveEndpoint() throws Exception {
+        mockLoginAsAdmin();
+
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        workflowService.approve(approveDto);
+
+        ArchiveActionDto dto = new ArchiveActionDto();
+        dto.setArticleId(testArticleId);
+        dto.setReason("内容过时");
+
+        mockMvc.perform(post("/content/article/workflow/archive")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(JSON.toJSONString(dto)))
+                .andExpect(status().isOk());
+
+        Article article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.ARCHIVED.getCode(), article.getStatus());
+    }
+
+    /**
+     * 重新发布接口测试（管理员）
+     */
+    @Test
+    void testRepublishEndpoint() throws Exception {
+        mockLoginAsAdmin();
+
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        workflowService.approve(approveDto);
+
+        workflowService.withdraw(testArticleId);
+
+        mockMvc.perform(post("/content/article/workflow/republish/" + testArticleId)
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk());
+
+        Article article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.PUBLISHED.getCode(), article.getStatus());
+    }
+
+    /**
+     * 仪表盘接口测试
+     */
+    @Test
+    void testDashboardEndpoint() throws Exception {
+        mockLoginAsAdmin();
+
+        mockMvc.perform(get("/content/article/workflow/dashboard"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
+    }
+
+    /**
+     * 仪表盘接口权限拦截（reviewer无dashboard权限）
+     */
+    @Test
+    void testDashboardPermissionDenied() throws Exception {
+        mockLoginAsReviewer();
+
+        mockMvc.perform(get("/content/article/workflow/dashboard"))
+                .andExpect(status().isForbidden());
+    }
+
     // ========== 辅助方法 ==========
 
     private void mockLoginAsAdmin() {
@@ -384,7 +485,11 @@ public class ArticleWorkflowControllerTest {
                 "content:article:withdraw",
                 "content:article:violation",
                 "content:article:forcePublish",
-                "content:article:review"
+                "content:article:review",
+                "content:article:grayscale",
+                "content:article:archive",
+                "content:article:republish",
+                "content:article:dashboard"
         );
 
         LoginUser loginUser = new LoginUser(user, perms);

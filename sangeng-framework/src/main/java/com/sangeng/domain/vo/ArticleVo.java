@@ -25,7 +25,7 @@ public class ArticleVo {
     private String thumbnail;
     //是否置顶（0否，1是）
     private String isTop;
-    //状态（0已发布，1草稿）
+    //状态（0草稿，1待审核，2定时发布，3已发布，4已撤回，5违规下架，6灰度可见，7归档）
     private String status;
     //访问量
     private Long viewCount;
