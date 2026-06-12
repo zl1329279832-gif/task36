@@ -93,6 +93,15 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment> impl
                     ArticleStatusEnum.SCHEDULED.getCode().equals(status)) {
                     throw new SystemException(AppHttpCodeEnum.ARTICLE_STATUS_INVALID);
                 }
+                // 已归档：冻结新增评论（保留历史评论可读）
+                if (ArticleStatusEnum.ARCHIVED.getCode().equals(status)) {
+                    throw new SystemException(AppHttpCodeEnum.COMMENT_FROZEN);
+                }
+                // 灰度可见/重新发布：不允许评论
+                if (ArticleStatusEnum.GRAY_VISIBLE.getCode().equals(status) ||
+                    ArticleStatusEnum.REPUBLISH.getCode().equals(status)) {
+                    throw new SystemException(AppHttpCodeEnum.ARTICLE_STATUS_INVALID);
+                }
                 // 检查文章是否允许评论（isComment字段）
                 if ("0".equals(article.getIsComment())) {
                     throw new SystemException(AppHttpCodeEnum.COMMENT_FROZEN);

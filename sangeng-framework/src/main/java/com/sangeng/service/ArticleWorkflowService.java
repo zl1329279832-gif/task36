@@ -1,6 +1,8 @@
 package com.sangeng.service;
 
 import com.sangeng.domain.ResponseResult;
+import com.sangeng.domain.dto.ArchiveActionDto;
+import com.sangeng.domain.dto.RepublishActionDto;
 import com.sangeng.domain.dto.ReviewActionDto;
 import com.sangeng.domain.dto.ViolationActionDto;
 
@@ -36,6 +38,15 @@ public interface ArticleWorkflowService {
     /** 强制发布：任意状态 -> 已发布 */
     ResponseResult forcePublish(Long articleId);
 
+    /** 灰度完全发布：灰度可见 -> 已发布 */
+    ResponseResult fullPublish(Long articleId);
+
+    /** 重新发布：已撤回/违规下架/已归档 -> 重新发布 -> 待审核 */
+    ResponseResult republish(RepublishActionDto dto);
+
+    /** 归档：已发布/已撤回/灰度可见 -> 已归档 */
+    ResponseResult archive(ArchiveActionDto dto);
+
     // ========== 查询方法 ==========
 
     /** 获取待审核文章列表 */
@@ -46,6 +57,12 @@ public interface ArticleWorkflowService {
 
     /** 获取违规文章列表 */
     ResponseResult getViolationArticles(Integer pageNum, Integer pageSize);
+
+    /** 获取灰度可见文章列表 */
+    ResponseResult getGrayArticles(Integer pageNum, Integer pageSize);
+
+    /** 获取已归档文章列表 */
+    ResponseResult getArchivedArticles(Integer pageNum, Integer pageSize);
 
     /** 获取文章审核历史 */
     ResponseResult getAuditHistory(Long articleId);

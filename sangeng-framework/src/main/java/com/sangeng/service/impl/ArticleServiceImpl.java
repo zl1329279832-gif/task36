@@ -21,6 +21,7 @@ import com.sangeng.service.CategoryService;
 import com.sangeng.utils.BeanCopyUtils;
 import com.sangeng.utils.OssValidationUtil;
 import com.sangeng.utils.RedisCache;
+import com.sangeng.utils.SecurityUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cglib.beans.BeanCopier;
 import org.springframework.stereotype.Service;
@@ -108,9 +109,16 @@ public class ArticleServiceImpl extends ServiceImpl<ArticleMapper, Article> impl
     public ResponseResult getArticleDetail(Long id) {
         //根据id查询文章
         Article article = getById(id);
-        // 博客端仅允许查看已发布的文章
-        if (!ArticleStatusEnum.PUBLISHED.getCode().equals(article.getStatus())) {
+        // 博客端仅允许查看已发布的文章，灰度文章仅对受众可见
+        String status = article.getStatus();
+        if (!ArticleStatusEnum.PUBLISHED.getCode().equals(status) &&
+                !ArticleStatusEnum.GRAY_VISIBLE.getCode().equals(status)) {
             throw new SystemException(AppHttpCodeEnum.ARTICLE_NOT_FOUND);
+        }
+        if (ArticleStatusEnum.GRAY_VISIBLE.getCode().equals(status)) {
+            if (!SecurityUtils.isAdmin() && !isInGrayAudience(article)) {
+                throw new SystemException(AppHttpCodeEnum.ARTICLE_NOT_FOUND);
+            }
         }
         //从redis中获取viewCount
         Integer viewCount = redisCache.getCacheMapValue("article:viewCount", id.toString());
@@ -129,9 +137,11 @@ public class ArticleServiceImpl extends ServiceImpl<ArticleMapper, Article> impl
 
     @Override
     public ResponseResult updateViewCount(Long id) {
-        // 仅已发布的文章才允许增加浏览量（下线/撤回文章不再追踪）
+        // 仅已发布或灰度可见的文章才允许增加浏览量
         Article article = getById(id);
-        if (article == null || !ArticleStatusEnum.PUBLISHED.getCode().equals(article.getStatus())) {
+        String status = article != null ? article.getStatus() : null;
+        if (article == null || (!ArticleStatusEnum.PUBLISHED.getCode().equals(status) &&
+                !ArticleStatusEnum.GRAY_VISIBLE.getCode().equals(status))) {
             return ResponseResult.okResult();
         }
         //更新redis中对应 id的浏览量
@@ -239,5 +249,22 @@ public class ArticleServiceImpl extends ServiceImpl<ArticleMapper, Article> impl
                 .collect(Collectors.toList());
         articleTagService.saveBatch(articleTags);
 
+    }
+
+    /**
+     * 检查当前用户是否在灰度受众列表中
+     */
+    private boolean isInGrayAudience(Article article) {
+        if (article.getGrayAudience() == null || article.getGrayAudience().isEmpty()) {
+            return false;
+        }
+        Long currentUserId = SecurityUtils.getUserId();
+        String[] audienceIds = article.getGrayAudience().split(",");
+        for (String id : audienceIds) {
+            if (id.trim().equals(currentUserId.toString())) {
+                return true;
+            }
+        }
+        return false;
     }
 }

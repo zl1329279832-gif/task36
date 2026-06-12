@@ -18,6 +18,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -38,9 +39,11 @@ public class CategoryServiceImpl extends ServiceImpl<CategoryMapper, Category> i
 
     @Override
     public ResponseResult getCategoryList() {
-        //查询文章表  状态为已发布的文章
+        //查询文章表  状态为已发布或灰度可见的文章
         LambdaQueryWrapper<Article> articleWrapper = new LambdaQueryWrapper<>();
-        articleWrapper.eq(Article::getStatus, ArticleStatusEnum.PUBLISHED.getCode());
+        articleWrapper.in(Article::getStatus, Arrays.asList(
+                ArticleStatusEnum.PUBLISHED.getCode(),
+                ArticleStatusEnum.GRAY_VISIBLE.getCode()));
         List<Article> articleList = articleService.list(articleWrapper);
         //获取文章的分类id，并且去重
         Set<Long> categoryIds = articleList.stream()

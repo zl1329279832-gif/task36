@@ -23,7 +23,9 @@ public enum AppHttpCodeEnum {
     REVIEW_REASON_REQUIRED(515, "审核驳回必须填写原因"),
     VIOLATION_REASON_REQUIRED(516, "违规下架必须填写原因"),
     COMMENT_FROZEN(517, "该文章已违规下架，评论功能已冻结"),
-    OSS_REFERENCE_INVALID(518, "文章附件引用失效，无法发布");
+    OSS_REFERENCE_INVALID(518, "文章附件引用失效，无法发布"),
+    ARCHIVE_REASON_REQUIRED(519, "归档操作必须填写原因"),
+    GRAY_AUDIENCE_REQUIRED(520, "灰度发布必须指定目标受众");
     int code;
     String msg;
 

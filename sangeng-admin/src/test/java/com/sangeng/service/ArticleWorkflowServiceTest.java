@@ -9,6 +9,8 @@ import com.sangeng.domain.entity.LoginUser;
 import com.sangeng.domain.entity.User;
 import com.sangeng.domain.dto.ReviewActionDto;
 import com.sangeng.domain.dto.ViolationActionDto;
+import com.sangeng.domain.dto.RepublishActionDto;
+import com.sangeng.domain.dto.ArchiveActionDto;
 import com.sangeng.enums.ArticleStatusEnum;
 import com.sangeng.exception.SystemException;
 import com.sangeng.utils.RedisCache;
@@ -610,6 +612,108 @@ public class ArticleWorkflowServiceTest {
         assertEquals(ArticleStatusEnum.PUBLISHED.getCode(), article.getStatus());
     }
 
+    // ========== 新增：扩展状态测试 ==========
+
+    /**
+     * 完整审核流含重新发布：发布 → 违规下线 → 重新发布 → 待审核 → 审核通过
+     */
+    @Test
+    void testFullAuditFlowWithRepublish() {
+        // 1. 发布
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        workflowService.approve(approveDto);
+        assertEquals(ArticleStatusEnum.PUBLISHED.getCode(),
+                articleService.getById(testArticleId).getStatus());
+
+        // 2. 违规下线
+        ViolationActionDto violationDto = new ViolationActionDto();
+        violationDto.setArticleId(testArticleId);
+        violationDto.setViolationReason("测试重新发布流");
+        workflowService.violationOffline(violationDto);
+        assertEquals(ArticleStatusEnum.VIOLATION_OFFLINE.getCode(),
+                articleService.getById(testArticleId).getStatus());
+
+        // 3. 重新发布 → 自动进入待审核
+        RepublishActionDto republishDto = new RepublishActionDto();
+        republishDto.setArticleId(testArticleId);
+        republishDto.setReason("修正后重新发布");
+        workflowService.republish(republishDto);
+
+        Article article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.PENDING_REVIEW.getCode(), article.getStatus());
+        assertNotNull(article.getRepublishCount());
+        assertTrue(article.getRepublishCount() >= 1);
+        assertNull(article.getViolationReason());
+
+        // 4. 审核通过
+        ReviewActionDto reApproveDto = new ReviewActionDto();
+        reApproveDto.setArticleId(testArticleId);
+        workflowService.approve(reApproveDto);
+        assertEquals(ArticleStatusEnum.PUBLISHED.getCode(),
+                articleService.getById(testArticleId).getStatus());
+
+        // 5. 验证审计日志包含重新发布记录
+        List<ArticleAuditLog> logs = auditLogService.getAuditHistory(testArticleId);
+        boolean hasRepublishLog = logs.stream()
+                .anyMatch(log -> ArticleStatusEnum.REPUBLISH.getCode().equals(log.getToStatus()));
+        assertTrue(hasRepublishLog, "审计日志应包含重新发布记录");
+    }
+
+    /**
+     * 灰度发布流程：待审核 → 灰度可见 → 完全发布 → 已发布
+     */
+    @Test
+    void testGrayVisibleFlow() {
+        workflowService.submitForReview(testArticleId);
+
+        // 灰度审批
+        ReviewActionDto grayDto = new ReviewActionDto();
+        grayDto.setArticleId(testArticleId);
+        grayDto.setGrayVisible(true);
+        grayDto.setGrayAudience("1,2,3");
+        workflowService.approve(grayDto);
+
+        Article article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.GRAY_VISIBLE.getCode(), article.getStatus());
+        assertEquals("1,2,3", article.getGrayAudience());
+        assertNotNull(article.getGrayPublishTime());
+
+        // 完全发布
+        workflowService.fullPublish(testArticleId);
+
+        article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.PUBLISHED.getCode(), article.getStatus());
+        assertNull(article.getGrayAudience());
+    }
+
+    /**
+     * 归档流程：已发布 → 归档
+     */
+    @Test
+    void testArchiveFromPublished() {
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        workflowService.approve(approveDto);
+
+        ArchiveActionDto archiveDto = new ArchiveActionDto();
+        archiveDto.setArticleId(testArticleId);
+        archiveDto.setArchiveReason("内容已过时");
+        workflowService.archive(archiveDto);
+
+        Article article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.ARCHIVED.getCode(), article.getStatus());
+        assertNotNull(article.getArchivedTime());
+
+        // 审计日志
+        List<ArticleAuditLog> logs = auditLogService.getAuditHistory(testArticleId);
+        ArticleAuditLog latest = logs.get(0);
+        assertEquals(ArticleStatusEnum.ARCHIVED.getCode(), latest.getToStatus());
+        assertTrue(latest.getReason().contains("内容已过时"));
+    }
+
     /**
      * 审核日志完整性：违规下线从SCHEDULED状态应有完整的状态链路
      */
@@ -657,7 +761,12 @@ public class ArticleWorkflowServiceTest {
                 "content:article:withdraw",
                 "content:article:violation",
                 "content:article:forcePublish",
-                "content:article:review"
+                "content:article:review",
+                "content:article:grayPublish",
+                "content:article:fullPublish",
+                "content:article:republish",
+                "content:article:archive",
+                "content:dashboard:view"
         ).stream().map(SimpleGrantedAuthority::new).collect(Collectors.toList());
 
         LoginUser loginUser = new LoginUser(user, Arrays.asList(
@@ -667,7 +776,12 @@ public class ArticleWorkflowServiceTest {
                 "content:article:withdraw",
                 "content:article:violation",
                 "content:article:forcePublish",
-                "content:article:review"
+                "content:article:review",
+                "content:article:grayPublish",
+                "content:article:fullPublish",
+                "content:article:republish",
+                "content:article:archive",
+                "content:dashboard:view"
         ));
 
         UsernamePasswordAuthenticationToken authToken =

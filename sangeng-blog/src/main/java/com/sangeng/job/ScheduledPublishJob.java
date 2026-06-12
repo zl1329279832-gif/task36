@@ -6,6 +6,7 @@ import com.sangeng.domain.entity.Article;
 import com.sangeng.enums.ArticleStatusEnum;
 import com.sangeng.service.ArticleAuditLogService;
 import com.sangeng.service.ArticleService;
+import com.sangeng.service.CacheOperationTracker;
 import com.sangeng.utils.OssValidationUtil;
 import com.sangeng.utils.RedisCache;
 import org.slf4j.Logger;
@@ -38,6 +39,9 @@ public class ScheduledPublishJob {
 
     @Autowired
     private RedisCache redisCache;
+
+    @Autowired
+    private CacheOperationTracker cacheOperationTracker;
 
     @Scheduled(cron = "0 * * * * ?")
     @Transactional
@@ -168,10 +172,13 @@ public class ScheduledPublishJob {
         redisCache.deleteObject(ArticleWorkflowConstants.CACHE_HOME_ARTICLES);
         redisCache.deleteObject(ArticleWorkflowConstants.CACHE_CATEGORY_LIST);
 
-        // 下线时同时清除浏览量缓存
-        if (ArticleStatusEnum.VIOLATION_OFFLINE.getCode().equals(article.getStatus())) {
+        // 下线或归档时同时清除浏览量缓存
+        if (ArticleStatusEnum.VIOLATION_OFFLINE.getCode().equals(article.getStatus()) ||
+                ArticleStatusEnum.ARCHIVED.getCode().equals(article.getStatus())) {
             redisCache.delCacheMapValue(ArticleWorkflowConstants.CACHE_VIEW_COUNT_KEY,
                     article.getId().toString());
         }
+
+        cacheOperationTracker.trackInvalidate(article.getId());
     }
 }

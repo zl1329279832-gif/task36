@@ -41,7 +41,7 @@ public class Article  {
     private String thumbnail;
     //是否置顶（0否，1是）
     private String isTop;
-    //状态（0草稿，1待审核，2定时发布，3已发布，4已撤回，5违规下架）
+    //状态（0草稿，1待审核，2定时发布，3已发布，4已撤回，5违规下架，6灰度可见，7重新发布，8已归档）
     private String status;
     //访问量
     private Long viewCount;
@@ -54,6 +54,14 @@ public class Article  {
     private String rejectReason;
     //违规原因
     private String violationReason;
+    //灰度受众（逗号分隔的用户ID）
+    private String grayAudience;
+    //重新发布次数
+    private Integer republishCount;
+    //归档时间
+    private Date archivedTime;
+    //灰度发布时间
+    private Date grayPublishTime;
 
     @TableField(fill = FieldFill.INSERT)
     private Long createBy;

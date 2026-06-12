@@ -299,6 +299,109 @@ public class CommentServiceTest {
         }
     }
 
+    /**
+     * 已归档文章评论被冻结 - 新增评论应抛出 COMMENT_FROZEN 异常
+     */
+    @Test
+    void testCommentFrozenOnArchivedArticle() {
+        Article archivedArticle = new Article();
+        archivedArticle.setTitle("归档文章");
+        archivedArticle.setContent("归档内容");
+        archivedArticle.setSummary("归档");
+        archivedArticle.setCategoryId(1L);
+        archivedArticle.setStatus(ArticleStatusEnum.ARCHIVED.getCode());
+        archivedArticle.setViewCount(0L);
+        archivedArticle.setIsTop("0");
+        archivedArticle.setIsComment("1");
+        articleService.save(archivedArticle);
+
+        try {
+            Comment comment = new Comment();
+            comment.setType(SystemConstants.ARTICLE_COMMENT);
+            comment.setArticleId(archivedArticle.getId());
+            comment.setRootId(-1L);
+            comment.setContent("尝试在归档文章下评论");
+            comment.setCreateBy(1L);
+
+            SystemException exception = assertThrows(SystemException.class, () -> {
+                commentService.addComment(comment);
+            });
+
+            assertEquals(AppHttpCodeEnum.COMMENT_FROZEN.getCode(), exception.getCode());
+        } finally {
+            articleService.removeById(archivedArticle.getId());
+        }
+    }
+
+    /**
+     * 灰度可见文章不允许新增评论
+     */
+    @Test
+    void testCommentBlockedOnGrayVisibleArticle() {
+        Article grayArticle = new Article();
+        grayArticle.setTitle("灰度文章");
+        grayArticle.setContent("灰度内容");
+        grayArticle.setSummary("灰度");
+        grayArticle.setCategoryId(1L);
+        grayArticle.setStatus(ArticleStatusEnum.GRAY_VISIBLE.getCode());
+        grayArticle.setViewCount(0L);
+        grayArticle.setIsTop("0");
+        grayArticle.setIsComment("1");
+        grayArticle.setGrayAudience("1");
+        articleService.save(grayArticle);
+
+        try {
+            Comment comment = new Comment();
+            comment.setType(SystemConstants.ARTICLE_COMMENT);
+            comment.setArticleId(grayArticle.getId());
+            comment.setRootId(-1L);
+            comment.setContent("尝试在灰度文章下评论");
+            comment.setCreateBy(1L);
+
+            SystemException exception = assertThrows(SystemException.class, () -> {
+                commentService.addComment(comment);
+            });
+
+            assertEquals(AppHttpCodeEnum.ARTICLE_STATUS_INVALID.getCode(), exception.getCode());
+        } finally {
+            articleService.removeById(grayArticle.getId());
+        }
+    }
+
+    /**
+     * 重新发布状态的文章不允许新增评论
+     */
+    @Test
+    void testCommentBlockedOnRepublishArticle() {
+        Article republishArticle = new Article();
+        republishArticle.setTitle("重新发布文章");
+        republishArticle.setContent("重新发布内容");
+        republishArticle.setSummary("重新发布");
+        republishArticle.setCategoryId(1L);
+        republishArticle.setStatus(ArticleStatusEnum.REPUBLISH.getCode());
+        republishArticle.setViewCount(0L);
+        republishArticle.setIsTop("0");
+        republishArticle.setIsComment("1");
+        articleService.save(republishArticle);
+
+        try {
+            Comment comment = new Comment();
+            comment.setType(SystemConstants.ARTICLE_COMMENT);
+            comment.setArticleId(republishArticle.getId());
+            comment.setRootId(-1L);
+            comment.setContent("尝试在重新发布文章下评论");
+            comment.setCreateBy(1L);
+
+            SystemException exception = assertThrows(SystemException.class, () -> {
+                commentService.addComment(comment);
+            });
+
+            assertEquals(AppHttpCodeEnum.ARTICLE_STATUS_INVALID.getCode(), exception.getCode());
+        } finally {
+            articleService.removeById(republishArticle.getId());
+        }
+    }
+
     // ========== 辅助方法 ==========
 
     private void mockLoginAsUser() {

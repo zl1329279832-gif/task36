@@ -6,6 +6,8 @@ import com.sangeng.constants.ArticleWorkflowConstants;
 import com.sangeng.domain.ResponseResult;
 import com.sangeng.domain.dto.ReviewActionDto;
 import com.sangeng.domain.dto.ViolationActionDto;
+import com.sangeng.domain.dto.RepublishActionDto;
+import com.sangeng.domain.dto.ArchiveActionDto;
 import com.sangeng.domain.entity.Article;
 import com.sangeng.domain.entity.User;
 import com.sangeng.domain.vo.ArticleListVo;
@@ -48,6 +50,9 @@ public class ArticleWorkflowServiceImpl implements ArticleWorkflowService {
     @Autowired
     private CategoryService categoryService;
 
+    @Autowired
+    private CacheOperationTracker cacheOperationTracker;
+
     @Override
     @Transactional
     public ResponseResult submitForReview(Long articleId) {
@@ -77,6 +82,24 @@ public class ArticleWorkflowServiceImpl implements ArticleWorkflowService {
         assertStatus(article, ArticleStatusEnum.PENDING_REVIEW);
 
         String oldStatus = article.getStatus();
+
+        // 灰度发布分支
+        if (Boolean.TRUE.equals(dto.getGrayVisible())) {
+            if (dto.getGrayAudience() == null || dto.getGrayAudience().trim().isEmpty()) {
+                throw new SystemException(AppHttpCodeEnum.GRAY_AUDIENCE_REQUIRED);
+            }
+            article.setStatus(ArticleStatusEnum.GRAY_VISIBLE.getCode());
+            article.setGrayAudience(dto.getGrayAudience());
+            article.setGrayPublishTime(new Date());
+            articleService.updateById(article);
+
+            logTransition(dto.getArticleId(), oldStatus,
+                    ArticleStatusEnum.GRAY_VISIBLE.getCode(),
+                    "灰度发布: " + dto.getGrayAudience());
+
+            refreshArticleCaches(article);
+            return ResponseResult.okResult();
+        }
 
         Date scheduledTime = dto.getScheduledPublishTime();
         if (scheduledTime != null && scheduledTime.after(new Date())) {
@@ -185,10 +208,11 @@ public class ArticleWorkflowServiceImpl implements ArticleWorkflowService {
 
         Article article = getArticleOrThrow(dto.getArticleId());
 
-        // 违规下线优先级高于定时发布：允许从 PUBLISHED 或 SCHEDULED 状态执行违规下线
+        // 违规下线优先级高于定时发布：允许从 PUBLISHED、SCHEDULED 或 GRAY_VISIBLE 状态执行违规下线
         String currentStatus = article.getStatus();
         if (!ArticleStatusEnum.PUBLISHED.getCode().equals(currentStatus) &&
-                !ArticleStatusEnum.SCHEDULED.getCode().equals(currentStatus)) {
+                !ArticleStatusEnum.SCHEDULED.getCode().equals(currentStatus) &&
+                !ArticleStatusEnum.GRAY_VISIBLE.getCode().equals(currentStatus)) {
             throw new SystemException(AppHttpCodeEnum.ARTICLE_STATUS_INVALID);
         }
 
@@ -259,6 +283,116 @@ public class ArticleWorkflowServiceImpl implements ArticleWorkflowService {
     @Override
     public ResponseResult getAuditHistory(Long articleId) {
         return ResponseResult.okResult(auditLogService.getAuditHistory(articleId));
+    }
+
+    @Override
+    @Transactional
+    public ResponseResult fullPublish(Long articleId) {
+        Article article = getArticleOrThrow(articleId);
+        assertStatus(article, ArticleStatusEnum.GRAY_VISIBLE);
+
+        // 仅管理员可执行完全发布
+        if (!SecurityUtils.isAdmin()) {
+            throw new SystemException(AppHttpCodeEnum.NO_OPERATOR_AUTH);
+        }
+
+        // 发布前OSS校验
+        validateOssReferences(article);
+
+        String oldStatus = article.getStatus();
+        article.setStatus(ArticleStatusEnum.PUBLISHED.getCode());
+        article.setPublishTime(new Date());
+        article.setGrayAudience(null);
+        articleService.updateById(article);
+
+        logTransition(articleId, oldStatus,
+                ArticleStatusEnum.PUBLISHED.getCode(), "灰度转完全发布");
+
+        refreshArticleCaches(article);
+        return ResponseResult.okResult();
+    }
+
+    @Override
+    @Transactional
+    public ResponseResult republish(RepublishActionDto dto) {
+        Article article = getArticleOrThrow(dto.getArticleId());
+
+        String currentStatus = article.getStatus();
+        if (!ArticleStatusEnum.WITHDRAWN.getCode().equals(currentStatus) &&
+                !ArticleStatusEnum.VIOLATION_OFFLINE.getCode().equals(currentStatus) &&
+                !ArticleStatusEnum.ARCHIVED.getCode().equals(currentStatus)) {
+            throw new SystemException(AppHttpCodeEnum.ARTICLE_STATUS_INVALID);
+        }
+
+        checkAuthorOrAdmin(article);
+
+        // Step 1: 进入 REPUBLISH 状态（审计追踪）
+        String oldStatus = article.getStatus();
+        article.setStatus(ArticleStatusEnum.REPUBLISH.getCode());
+        article.setRepublishCount(
+                (article.getRepublishCount() != null ? article.getRepublishCount() : 0) + 1);
+        article.setViolationReason(null);
+        article.setRejectReason(null);
+        article.setArchivedTime(null);
+        articleService.updateById(article);
+
+        logTransition(dto.getArticleId(), oldStatus,
+                ArticleStatusEnum.REPUBLISH.getCode(),
+                "重新发布: " + (dto.getReason() != null ? dto.getReason() : ""));
+
+        // Step 2: 自动提交至待审核（同一事务）
+        article.setStatus(ArticleStatusEnum.PENDING_REVIEW.getCode());
+        articleService.updateById(article);
+
+        logTransition(dto.getArticleId(),
+                ArticleStatusEnum.REPUBLISH.getCode(),
+                ArticleStatusEnum.PENDING_REVIEW.getCode(),
+                "重新发布自动提交审核");
+
+        return ResponseResult.okResult();
+    }
+
+    @Override
+    @Transactional
+    public ResponseResult archive(ArchiveActionDto dto) {
+        if (dto.getArchiveReason() == null || dto.getArchiveReason().trim().isEmpty()) {
+            throw new SystemException(AppHttpCodeEnum.ARCHIVE_REASON_REQUIRED);
+        }
+
+        Article article = getArticleOrThrow(dto.getArticleId());
+
+        String currentStatus = article.getStatus();
+        if (!ArticleStatusEnum.PUBLISHED.getCode().equals(currentStatus) &&
+                !ArticleStatusEnum.WITHDRAWN.getCode().equals(currentStatus) &&
+                !ArticleStatusEnum.GRAY_VISIBLE.getCode().equals(currentStatus)) {
+            throw new SystemException(AppHttpCodeEnum.ARTICLE_STATUS_INVALID);
+        }
+
+        // 仅管理员可归档
+        if (!SecurityUtils.isAdmin()) {
+            throw new SystemException(AppHttpCodeEnum.NO_OPERATOR_AUTH);
+        }
+
+        article.setStatus(ArticleStatusEnum.ARCHIVED.getCode());
+        article.setArchivedTime(new Date());
+        articleService.updateById(article);
+
+        logTransition(dto.getArticleId(), currentStatus,
+                ArticleStatusEnum.ARCHIVED.getCode(),
+                "归档: " + dto.getArchiveReason());
+
+        invalidateArticleCaches(article);
+        return ResponseResult.okResult();
+    }
+
+    @Override
+    public ResponseResult getGrayArticles(Integer pageNum, Integer pageSize) {
+        return getArticlesByStatus(ArticleStatusEnum.GRAY_VISIBLE.getCode(), pageNum, pageSize);
+    }
+
+    @Override
+    public ResponseResult getArchivedArticles(Integer pageNum, Integer pageSize) {
+        return getArticlesByStatus(ArticleStatusEnum.ARCHIVED.getCode(), pageNum, pageSize);
     }
 
     // ========== 私有辅助方法 ==========
@@ -379,6 +513,8 @@ public class ArticleWorkflowServiceImpl implements ArticleWorkflowService {
 
         // 3. 删除分类列表缓存（重新发布时恢复分类/标签统计）
         redisCache.deleteObject(ArticleWorkflowConstants.CACHE_CATEGORY_LIST);
+
+        cacheOperationTracker.trackRefresh(article.getId());
     }
 
     /**
@@ -400,5 +536,7 @@ public class ArticleWorkflowServiceImpl implements ArticleWorkflowService {
         // 4. 清除该文章的浏览量缓存（下线文章不再追踪浏览量）
         redisCache.delCacheMapValue(ArticleWorkflowConstants.CACHE_VIEW_COUNT_KEY,
                 article.getId().toString());
+
+        cacheOperationTracker.trackInvalidate(article.getId());
     }
 }

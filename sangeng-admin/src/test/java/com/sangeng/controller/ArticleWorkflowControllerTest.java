@@ -5,6 +5,8 @@ import com.sangeng.BlogAdminApplication;
 import com.sangeng.constants.ArticleWorkflowConstants;
 import com.sangeng.domain.dto.ReviewActionDto;
 import com.sangeng.domain.dto.ViolationActionDto;
+import com.sangeng.domain.dto.RepublishActionDto;
+import com.sangeng.domain.dto.ArchiveActionDto;
 import com.sangeng.domain.entity.Article;
 import com.sangeng.domain.entity.LoginUser;
 import com.sangeng.domain.entity.User;
@@ -368,6 +370,138 @@ public class ArticleWorkflowControllerTest {
                 .andExpect(status().isForbidden());
     }
 
+    // ========== 新增：扩展状态端点测试 ==========
+
+    /**
+     * 重新发布端点
+     */
+    @Test
+    void testRepublishEndpoint() throws Exception {
+        mockLoginAsAdmin();
+
+        // 先发布再撤回
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        workflowService.approve(approveDto);
+        workflowService.withdraw(testArticleId);
+
+        RepublishActionDto republishDto = new RepublishActionDto();
+        republishDto.setArticleId(testArticleId);
+        republishDto.setReason("重新发布测试");
+
+        mockMvc.perform(post("/content/article/workflow/republish")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(JSON.toJSONString(republishDto)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
+
+        Article article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.PENDING_REVIEW.getCode(), article.getStatus());
+    }
+
+    /**
+     * 归档端点
+     */
+    @Test
+    void testArchiveEndpoint() throws Exception {
+        mockLoginAsAdmin();
+
+        // 先发布文章
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto approveDto = new ReviewActionDto();
+        approveDto.setArticleId(testArticleId);
+        workflowService.approve(approveDto);
+
+        ArchiveActionDto archiveDto = new ArchiveActionDto();
+        archiveDto.setArticleId(testArticleId);
+        archiveDto.setArchiveReason("端点测试归档");
+
+        mockMvc.perform(post("/content/article/workflow/archive")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(JSON.toJSONString(archiveDto)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
+
+        Article article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.ARCHIVED.getCode(), article.getStatus());
+    }
+
+    /**
+     * 完全发布端点（灰度→发布）
+     */
+    @Test
+    void testFullPublishEndpoint() throws Exception {
+        mockLoginAsAdmin();
+
+        // 先提交审核并灰度发布
+        workflowService.submitForReview(testArticleId);
+        ReviewActionDto grayDto = new ReviewActionDto();
+        grayDto.setArticleId(testArticleId);
+        grayDto.setGrayVisible(true);
+        grayDto.setGrayAudience("1,2");
+        workflowService.approve(grayDto);
+
+        mockMvc.perform(post("/content/article/workflow/fullPublish/" + testArticleId)
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
+
+        Article article = articleService.getById(testArticleId);
+        assertEquals(ArticleStatusEnum.PUBLISHED.getCode(), article.getStatus());
+    }
+
+    /**
+     * 灰度文章列表端点
+     */
+    @Test
+    void testGrayArticleListEndpoint() throws Exception {
+        mockLoginAsAdmin();
+
+        mockMvc.perform(get("/content/article/workflow/gray")
+                        .param("pageNum", "1")
+                        .param("pageSize", "10"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
+    }
+
+    /**
+     * 归档文章列表端点
+     */
+    @Test
+    void testArchivedArticleListEndpoint() throws Exception {
+        mockLoginAsAdmin();
+
+        mockMvc.perform(get("/content/article/workflow/archived")
+                        .param("pageNum", "1")
+                        .param("pageSize", "10"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
+    }
+
+    /**
+     * 运营看板端点
+     */
+    @Test
+    void testDashboardEndpoint() throws Exception {
+        mockLoginAsAdmin();
+
+        mockMvc.perform(get("/content/dashboard/stats"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
+    }
+
+    /**
+     * 运营看板权限拦截：无权限用户返回403
+     */
+    @Test
+    void testDashboardPermissionDenied() throws Exception {
+        mockLoginAsUserWithoutPermissions();
+
+        mockMvc.perform(get("/content/dashboard/stats"))
+                .andExpect(status().isForbidden());
+    }
+
     // ========== 辅助方法 ==========
 
     private void mockLoginAsAdmin() {
@@ -384,7 +518,12 @@ public class ArticleWorkflowControllerTest {
                 "content:article:withdraw",
                 "content:article:violation",
                 "content:article:forcePublish",
-                "content:article:review"
+                "content:article:review",
+                "content:article:grayPublish",
+                "content:article:fullPublish",
+                "content:article:republish",
+                "content:article:archive",
+                "content:dashboard:view"
         );
 
         LoginUser loginUser = new LoginUser(user, perms);

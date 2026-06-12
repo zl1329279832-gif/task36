@@ -4,6 +4,8 @@ import com.sangeng.annotation.SystemLog;
 import com.sangeng.domain.ResponseResult;
 import com.sangeng.domain.dto.ReviewActionDto;
 import com.sangeng.domain.dto.ViolationActionDto;
+import com.sangeng.domain.dto.RepublishActionDto;
+import com.sangeng.domain.dto.ArchiveActionDto;
 import com.sangeng.service.ArticleWorkflowService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -93,5 +95,42 @@ public class ArticleWorkflowController {
     @PreAuthorize("@ps.hasPermission('content:article:review')")
     public ResponseResult getAuditHistory(@PathVariable Long articleId) {
         return workflowService.getAuditHistory(articleId);
+    }
+
+    @PostMapping("/fullPublish/{articleId}")
+    @PreAuthorize("@ps.hasPermission('content:article:fullPublish')")
+    @SystemLog(businessName = "灰度转完全发布")
+    public ResponseResult fullPublish(@PathVariable Long articleId) {
+        return workflowService.fullPublish(articleId);
+    }
+
+    @PostMapping("/republish")
+    @PreAuthorize("@ps.hasPermission('content:article:republish')")
+    @SystemLog(businessName = "重新发布文章")
+    public ResponseResult republish(@RequestBody RepublishActionDto dto) {
+        return workflowService.republish(dto);
+    }
+
+    @PostMapping("/archive")
+    @PreAuthorize("@ps.hasPermission('content:article:archive')")
+    @SystemLog(businessName = "归档文章")
+    public ResponseResult archive(@RequestBody ArchiveActionDto dto) {
+        return workflowService.archive(dto);
+    }
+
+    @GetMapping("/gray")
+    @PreAuthorize("@ps.hasPermission('content:article:grayPublish')")
+    public ResponseResult getGrayArticles(
+            @RequestParam(defaultValue = "1") Integer pageNum,
+            @RequestParam(defaultValue = "10") Integer pageSize) {
+        return workflowService.getGrayArticles(pageNum, pageSize);
+    }
+
+    @GetMapping("/archived")
+    @PreAuthorize("@ps.hasPermission('content:article:archive')")
+    public ResponseResult getArchivedArticles(
+            @RequestParam(defaultValue = "1") Integer pageNum,
+            @RequestParam(defaultValue = "10") Integer pageSize) {
+        return workflowService.getArchivedArticles(pageNum, pageSize);
     }
 }
